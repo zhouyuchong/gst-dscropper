@@ -20,20 +20,6 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
-/**
- * There are two threads in the optimized code. input thread and Processing thread.
- * The pre-procesing as required by the algorithm like scaling and color
- * conversion of data is done in input thread. This is done using NvBufSurfTransform's
- * batch conversion APIs to improve performance. The processing of data using custom
- * algorithm and parsing the output and  metadata attachment is done in separate processing
- * thread.
- *
- * There are two queues used for buffering and transferring data between thread:
- * Process_queue and buf_queue Process_queue is used to send filled batched data to
- * process thread and buf_queue is used to get return empty processed buffers from
- * process thread to input thread.  Two buffers are used in a ping pong manner between
- * the two threads for parallel processing.
- */
 
 #include <string.h>
 #include <string>
@@ -42,7 +28,7 @@
 #include <ostream>
 #include <fstream>
 
-#include "gstdsexample_optimized.h"
+#include "gstdsclipper.h"
 
 #include <sys/time.h>
 #include <condition_variable>
@@ -56,13 +42,6 @@ GST_DEBUG_CATEGORY_STATIC (gst_dsexample_debug);
 #define GST_CAT_DEFAULT gst_dsexample_debug
 #define USE_EGLIMAGE 1
 
-#ifdef WITH_OPENCV
-//enable to write transformed cvmat to files
-//#define DSEXAMPLE_DEBUG
-#ifdef DSEXAMPLE_DEBUG
-#include "opencv2/imgcodecs.hpp"
-#endif
-#endif
 
 static GQuark _dsmeta_quark = 0;
 
