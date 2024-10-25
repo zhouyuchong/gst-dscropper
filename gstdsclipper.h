@@ -144,9 +144,6 @@ struct _GstDsClipper
   gchar *name_format;
   gint operate_on_gie_id;
   std::vector<gboolean> *operate_on_class_ids;
-  guint processing_height;
-  guint processing_width;
-  guint max_batch_size;
 };
 
 typedef struct

@@ -80,6 +80,7 @@ enum
 #define DEFAULT_OPERATE_ON_GIE_ID -1
 #define DEFAULT_OUTPUT_PATH ""
 #define DEFAULT_NAME_FORMAT "frame;trackid;classid;conf"
+#define DEFAULT_INTERVAL 0
 
 #define RGB_BYTES_PER_PIXEL 3
 #define RGBA_BYTES_PER_PIXEL 4
@@ -262,12 +263,10 @@ gst_dsclipper_init (GstDsClipper * dsclipper)
   dsclipper->unique_id = DEFAULT_UNIQUE_ID;
   dsclipper->gpu_id = DEFAULT_GPU_ID;
   dsclipper->operate_on_gie_id = DEFAULT_OPERATE_ON_GIE_ID;
-  dsclipper->processing_height = 640;
-  dsclipper->processing_width = 640;
-  dsclipper->max_batch_size = 4;
   dsclipper->operate_on_class_ids = new std::vector < gboolean >;
   dsclipper->output_path = g_strdup (DEFAULT_OUTPUT_PATH);
   dsclipper->name_format = g_strdup (DEFAULT_NAME_FORMAT);
+  dsclipper->interval = DEFAULT_INTERVAL;
   /* This quark is required to identify NvDsMeta when iterating through
    * the buffer metadatas */
   if (!_dsmeta_quark)
@@ -293,6 +292,10 @@ gst_dsclipper_set_property (GObject * object, guint prop_id,
       break;
     case PROP_OUTPUT_PATH:
       dsclipper->output_path = g_value_dup_string (value);
+      break;
+
+    case PROP_OPERATE_ON_GIE_ID:
+      dsclipper->operate_on_gie_id = g_value_get_int (value);
       break;
       
     case PROP_OPERATE_ON_CLASS_IDS:
@@ -337,7 +340,7 @@ gst_dsclipper_get_property (GObject * object, guint prop_id,
       g_value_set_uint (value, dsclipper->gpu_id);
       break;
     case PROP_OPERATE_ON_GIE_ID:
-      dsclipper->operate_on_gie_id = g_value_get_int (value);
+      g_value_set_int (value, dsclipper->operate_on_gie_id);
       break;
     case PROP_OPERATE_ON_CLASS_IDS:
     {
@@ -589,7 +592,9 @@ gst_dsclipper_submit_input_buffer (GstBaseTransform * btrans,
       obj_meta = (NvDsObjectMeta *) (l_obj->data);
 
       need_clip = should_crop_object (dsclipper, obj_meta, frame_meta->frame_num);
-      printf("cls id: %d, need clip: %d\n", obj_meta->class_id, need_clip);
+      // printf("cls id: %d, need clip: %d\n", obj_meta->class_id, need_clip);
+      // std::cout<<obj_meta->object_id<<" "<<UNTRACKED_OBJECT_ID<<std::endl;
+      // continue;
       if (!need_clip) continue;
 
       // /* Should not process on objects smaller than MIN_INPUT_OBJECT_WIDTH x MIN_INPUT_OBJECT_HEIGHT
