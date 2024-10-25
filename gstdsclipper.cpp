@@ -38,8 +38,8 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 
-GST_DEBUG_CATEGORY_STATIC (gst_dsexample_debug);
-#define GST_CAT_DEFAULT gst_dsexample_debug
+GST_DEBUG_CATEGORY_STATIC (gst_dsclipper_debug);
+#define GST_CAT_DEFAULT gst_dsclipper_debug
 #define USE_EGLIMAGE 1
 
 
@@ -111,7 +111,7 @@ enum
 /* By default NVIDIA Hardware allocated memory flows through the pipeline. We
  * will be processing on this type of memory only. */
 #define GST_CAPS_FEATURE_MEMORY_NVMM "memory:NVMM"
-static GstStaticPadTemplate gst_dsexample_sink_template =
+static GstStaticPadTemplate gst_dsclipper_sink_template =
 GST_STATIC_PAD_TEMPLATE ("sink",
     GST_PAD_SINK,
     GST_PAD_ALWAYS,
@@ -119,7 +119,7 @@ GST_STATIC_PAD_TEMPLATE ("sink",
         (GST_CAPS_FEATURE_MEMORY_NVMM,
             "{ NV12, RGBA, I420 }")));
 
-static GstStaticPadTemplate gst_dsexample_src_template =
+static GstStaticPadTemplate gst_dsclipper_src_template =
 GST_STATIC_PAD_TEMPLATE ("src",
     GST_PAD_SRC,
     GST_PAD_ALWAYS,
@@ -128,42 +128,42 @@ GST_STATIC_PAD_TEMPLATE ("src",
             "{ NV12, RGBA, I420 }")));
 
 /* Define our element type. Standard GObject/GStreamer boilerplate stuff */
-#define gst_dsexample_parent_class parent_class
-G_DEFINE_TYPE (GstDsExample, gst_dsexample, GST_TYPE_BASE_TRANSFORM);
+#define gst_dsclipper_parent_class parent_class
+G_DEFINE_TYPE (GstDsClipper, gst_dsclipper, GST_TYPE_BASE_TRANSFORM);
 
-static void gst_dsexample_set_property (GObject * object, guint prop_id,
+static void gst_dsclipper_set_property (GObject * object, guint prop_id,
     const GValue * value, GParamSpec * pspec);
-static void gst_dsexample_get_property (GObject * object, guint prop_id,
+static void gst_dsclipper_get_property (GObject * object, guint prop_id,
     GValue * value, GParamSpec * pspec);
 
-static gboolean gst_dsexample_set_caps (GstBaseTransform * btrans,
+static gboolean gst_dsclipper_set_caps (GstBaseTransform * btrans,
     GstCaps * incaps, GstCaps * outcaps);
-static gboolean gst_dsexample_start (GstBaseTransform * btrans);
-static gboolean gst_dsexample_stop (GstBaseTransform * btrans);
+static gboolean gst_dsclipper_start (GstBaseTransform * btrans);
+static gboolean gst_dsclipper_stop (GstBaseTransform * btrans);
 
 static GstFlowReturn
-gst_dsexample_submit_input_buffer (GstBaseTransform * btrans,
+gst_dsclipper_submit_input_buffer (GstBaseTransform * btrans,
     gboolean discont, GstBuffer * inbuf);
 static GstFlowReturn
-gst_dsexample_generate_output (GstBaseTransform * btrans, GstBuffer ** outbuf);
+gst_dsclipper_generate_output (GstBaseTransform * btrans, GstBuffer ** outbuf);
 
 static void
-attach_metadata_full_frame (GstDsExample * dsexample,
-    NvDsFrameMeta * frame_meta, gdouble scale_ratio, DsExampleOutput * output,
+attach_metadata_full_frame (GstDsClipper * dsclipper,
+    NvDsFrameMeta * frame_meta, gdouble scale_ratio, DsClipperOutput * output,
     guint batch_id);
-static void attach_metadata_object (GstDsExample * dsexample,
-    NvDsObjectMeta * obj_meta, DsExampleOutput * output);
+static void attach_metadata_object (GstDsClipper * dsclipper,
+    NvDsObjectMeta * obj_meta, DsClipperOutput * output);
 
-static gpointer gst_dsexample_output_loop (gpointer data);
+static gpointer gst_dsclipper_output_loop (gpointer data);
 
-static gpointer gst_dsexample_data_loop (gpointer data);
+static gpointer gst_dsclipper_data_loop (gpointer data);
 
 /* Install properties, set sink and src pad capabilities, override the required
  * functions of the base class, These are common to all instances of the
  * element.
  */
 static void
-gst_dsexample_class_init (GstDsExampleClass * klass)
+gst_dsclipper_class_init (GstDsClipperClass * klass)
 {
   GObjectClass *gobject_class;
   GstElementClass *gstelement_class;
@@ -177,17 +177,17 @@ gst_dsexample_class_init (GstDsExampleClass * klass)
   gstbasetransform_class = (GstBaseTransformClass *) klass;
 
   /* Overide base class functions */
-  gobject_class->set_property = GST_DEBUG_FUNCPTR (gst_dsexample_set_property);
-  gobject_class->get_property = GST_DEBUG_FUNCPTR (gst_dsexample_get_property);
+  gobject_class->set_property = GST_DEBUG_FUNCPTR (gst_dsclipper_set_property);
+  gobject_class->get_property = GST_DEBUG_FUNCPTR (gst_dsclipper_get_property);
 
-  gstbasetransform_class->set_caps = GST_DEBUG_FUNCPTR (gst_dsexample_set_caps);
-  gstbasetransform_class->start = GST_DEBUG_FUNCPTR (gst_dsexample_start);
-  gstbasetransform_class->stop = GST_DEBUG_FUNCPTR (gst_dsexample_stop);
+  gstbasetransform_class->set_caps = GST_DEBUG_FUNCPTR (gst_dsclipper_set_caps);
+  gstbasetransform_class->start = GST_DEBUG_FUNCPTR (gst_dsclipper_start);
+  gstbasetransform_class->stop = GST_DEBUG_FUNCPTR (gst_dsclipper_stop);
 
   gstbasetransform_class->submit_input_buffer =
-      GST_DEBUG_FUNCPTR (gst_dsexample_submit_input_buffer);
+      GST_DEBUG_FUNCPTR (gst_dsclipper_submit_input_buffer);
   gstbasetransform_class->generate_output =
-      GST_DEBUG_FUNCPTR (gst_dsexample_generate_output);
+      GST_DEBUG_FUNCPTR (gst_dsclipper_generate_output);
 
   /* Install properties */
   g_object_class_install_property (gobject_class, PROP_UNIQUE_ID,
@@ -221,7 +221,7 @@ gst_dsexample_class_init (GstDsExampleClass * klass)
   g_object_class_install_property (gobject_class, PROP_BATCH_SIZE,
       g_param_spec_uint ("batch-size", "Batch Size",
           "Maximum batch size for processing",
-          1, NVDSEXAMPLE_MAX_BATCH_SIZE, DEFAULT_BATCH_SIZE,
+          1, NVDSCLIPPER_MAX_BATCH_SIZE, DEFAULT_BATCH_SIZE,
           (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
               GST_PARAM_MUTABLE_READY)));
 
@@ -235,23 +235,23 @@ gst_dsexample_class_init (GstDsExampleClass * klass)
               G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_READY)));
   /* Set sink and src pad capabilities */
   gst_element_class_add_pad_template (gstelement_class,
-      gst_static_pad_template_get (&gst_dsexample_src_template));
+      gst_static_pad_template_get (&gst_dsclipper_src_template));
   gst_element_class_add_pad_template (gstelement_class,
-      gst_static_pad_template_get (&gst_dsexample_sink_template));
+      gst_static_pad_template_get (&gst_dsclipper_sink_template));
 
   /* Set metadata describing the element */
   gst_element_class_set_details_simple (gstelement_class,
-      "DsExample plugin",
-      "DsExample Plugin",
+      "DsClipper plugin",
+      "DsClipper Plugin",
       "Process a 3rdparty example algorithm on objects / full frame",
       "NVIDIA Corporation. Post on Deepstream for Tesla forum for any queries "
       "@ https://devtalk.nvidia.com/default/board/209/");
 }
 
 static void
-gst_dsexample_init (GstDsExample * dsexample)
+gst_dsclipper_init (GstDsClipper * dsclipper)
 {
-  GstBaseTransform *btrans = GST_BASE_TRANSFORM (dsexample);
+  GstBaseTransform *btrans = GST_BASE_TRANSFORM (dsclipper);
 
   /* We will not be generating a new buffer. Just adding / updating
    * metadata. */
@@ -261,12 +261,12 @@ gst_dsexample_init (GstDsExample * dsexample)
   gst_base_transform_set_passthrough (GST_BASE_TRANSFORM (btrans), TRUE);
 
   /* Initialize all property variables to default values */
-  dsexample->unique_id = DEFAULT_UNIQUE_ID;
-  dsexample->processing_width = DEFAULT_PROCESSING_WIDTH;
-  dsexample->processing_height = DEFAULT_PROCESSING_HEIGHT;
-  dsexample->process_full_frame = DEFAULT_PROCESS_FULL_FRAME;
-  dsexample->gpu_id = DEFAULT_GPU_ID;
-  dsexample->max_batch_size = DEFAULT_BATCH_SIZE;
+  dsclipper->unique_id = DEFAULT_UNIQUE_ID;
+  dsclipper->processing_width = DEFAULT_PROCESSING_WIDTH;
+  dsclipper->processing_height = DEFAULT_PROCESSING_HEIGHT;
+  dsclipper->process_full_frame = DEFAULT_PROCESS_FULL_FRAME;
+  dsclipper->gpu_id = DEFAULT_GPU_ID;
+  dsclipper->max_batch_size = DEFAULT_BATCH_SIZE;
   /* This quark is required to identify NvDsMeta when iterating through
    * the buffer metadatas */
   if (!_dsmeta_quark)
@@ -276,28 +276,28 @@ gst_dsexample_init (GstDsExample * dsexample)
 /* Function called when a property of the element is set. Standard boilerplate.
  */
 static void
-gst_dsexample_set_property (GObject * object, guint prop_id,
+gst_dsclipper_set_property (GObject * object, guint prop_id,
     const GValue * value, GParamSpec * pspec)
 {
-  GstDsExample *dsexample = GST_DSEXAMPLE (object);
+  GstDsClipper *dsclipper = GST_DSCLIPPER (object);
   switch (prop_id) {
     case PROP_UNIQUE_ID:
-      dsexample->unique_id = g_value_get_uint (value);
+      dsclipper->unique_id = g_value_get_uint (value);
       break;
     case PROP_PROCESSING_WIDTH:
-      dsexample->processing_width = g_value_get_int (value);
+      dsclipper->processing_width = g_value_get_int (value);
       break;
     case PROP_PROCESSING_HEIGHT:
-      dsexample->processing_height = g_value_get_int (value);
+      dsclipper->processing_height = g_value_get_int (value);
       break;
     case PROP_PROCESS_FULL_FRAME:
-      dsexample->process_full_frame = g_value_get_boolean (value);
+      dsclipper->process_full_frame = g_value_get_boolean (value);
       break;
     case PROP_GPU_DEVICE_ID:
-      dsexample->gpu_id = g_value_get_uint (value);
+      dsclipper->gpu_id = g_value_get_uint (value);
       break;
     case PROP_BATCH_SIZE:
-      dsexample->max_batch_size = g_value_get_uint (value);
+      dsclipper->max_batch_size = g_value_get_uint (value);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -309,29 +309,29 @@ gst_dsexample_set_property (GObject * object, guint prop_id,
  * boilerplate.
  */
 static void
-gst_dsexample_get_property (GObject * object, guint prop_id,
+gst_dsclipper_get_property (GObject * object, guint prop_id,
     GValue * value, GParamSpec * pspec)
 {
-  GstDsExample *dsexample = GST_DSEXAMPLE (object);
+  GstDsClipper *dsclipper = GST_DSCLIPPER (object);
 
   switch (prop_id) {
     case PROP_UNIQUE_ID:
-      g_value_set_uint (value, dsexample->unique_id);
+      g_value_set_uint (value, dsclipper->unique_id);
       break;
     case PROP_PROCESSING_WIDTH:
-      g_value_set_int (value, dsexample->processing_width);
+      g_value_set_int (value, dsclipper->processing_width);
       break;
     case PROP_PROCESSING_HEIGHT:
-      g_value_set_int (value, dsexample->processing_height);
+      g_value_set_int (value, dsclipper->processing_height);
       break;
     case PROP_PROCESS_FULL_FRAME:
-      g_value_set_boolean (value, dsexample->process_full_frame);
+      g_value_set_boolean (value, dsclipper->process_full_frame);
       break;
     case PROP_GPU_DEVICE_ID:
-      g_value_set_uint (value, dsexample->gpu_id);
+      g_value_set_uint (value, dsclipper->gpu_id);
       break;
     case PROP_BATCH_SIZE:
-      g_value_set_uint (value, dsexample->max_batch_size);
+      g_value_set_uint (value, dsclipper->max_batch_size);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -343,9 +343,9 @@ gst_dsexample_get_property (GObject * object, guint prop_id,
  * Initialize all resources and start the process thread
  */
 static gboolean
-gst_dsexample_start (GstBaseTransform * btrans)
+gst_dsclipper_start (GstBaseTransform * btrans)
 {
-  GstDsExample *dsexample = GST_DSEXAMPLE (btrans);
+  GstDsClipper *dsclipper = GST_DSCLIPPER (btrans);
   std::string nvtx_str;
 #ifdef WITH_OPENCV
   // OpenCV mat containing RGB data
@@ -354,37 +354,37 @@ gst_dsexample_start (GstBaseTransform * btrans)
   NvBufSurface * inter_buf;
 #endif
   NvBufSurfaceCreateParams create_params;
-  DsExampleInitParams init_params =
-      { dsexample->processing_width, dsexample->processing_height,
-    dsexample->process_full_frame };
+  DsClipperInitParams init_params =
+      { dsclipper->processing_width, dsclipper->processing_height,
+    dsclipper->process_full_frame };
 
   /* Algorithm specific initializations and resource allocation. */
-  dsexample->dsexamplelib_ctx = DsExampleCtxInit (&init_params);
+  dsclipper->dsclipperlib_ctx = DsClipperCtxInit (&init_params);
 
-  GST_DEBUG_OBJECT (dsexample, "ctx lib %p \n", dsexample->dsexamplelib_ctx);
+  GST_DEBUG_OBJECT (dsclipper, "ctx lib %p \n", dsclipper->dsclipperlib_ctx);
 
-  nvtx_str = "GstNvDsExample: UID=" + std::to_string(dsexample->unique_id);
+  nvtx_str = "GstNvDsClipper: UID=" + std::to_string(dsclipper->unique_id);
   auto nvtx_deleter = [](nvtxDomainHandle_t d) { nvtxDomainDestroy (d); };
   std::unique_ptr<nvtxDomainRegistration, decltype(nvtx_deleter)> nvtx_domain_ptr (
       nvtxDomainCreate(nvtx_str.c_str()), nvtx_deleter);
 
-  CHECK_CUDA_STATUS (cudaSetDevice (dsexample->gpu_id),
+  CHECK_CUDA_STATUS (cudaSetDevice (dsclipper->gpu_id),
       "Unable to set cuda device");
 
-  CHECK_CUDA_STATUS (cudaStreamCreate (&dsexample->cuda_stream),
+  CHECK_CUDA_STATUS (cudaStreamCreate (&dsclipper->cuda_stream),
       "Could not create cuda stream");
 
 #ifdef WITH_OPENCV
-  if (dsexample->inter_buf)
-    NvBufSurfaceDestroy (dsexample->inter_buf);
-  dsexample->inter_buf = NULL;
+  if (dsclipper->inter_buf)
+    NvBufSurfaceDestroy (dsclipper->inter_buf);
+  dsclipper->inter_buf = NULL;
 #endif
 
   /* An intermediate buffer for NV12/RGBA to BGR conversion  will be
    * required. Can be skipped if custom algorithm can work directly on NV12/RGBA. */
-  create_params.gpuId = dsexample->gpu_id;
-  create_params.width = dsexample->processing_width;
-  create_params.height = dsexample->processing_height;
+  create_params.gpuId = dsclipper->gpu_id;
+  create_params.width = dsclipper->processing_width;
+  create_params.height = dsclipper->processing_height;
   create_params.size = 0;
   create_params.colorFormat = NVBUF_COLOR_FORMAT_RGBA;
   create_params.layout = NVBUF_LAYOUT_PITCH;
@@ -395,9 +395,9 @@ gst_dsexample_start (GstBaseTransform * btrans)
 #endif
 
 #ifdef WITH_OPENCV
-  if (NvBufSurfaceCreate (&dsexample->inter_buf, dsexample->max_batch_size,
+  if (NvBufSurfaceCreate (&dsclipper->inter_buf, dsclipper->max_batch_size,
           &create_params) != 0) {
-    GST_ERROR ("Error: Could not allocate internal buffer for dsexample");
+    GST_ERROR ("Error: Could not allocate internal buffer for dsclipper");
     goto error;
   }
 #endif
@@ -405,9 +405,9 @@ gst_dsexample_start (GstBaseTransform * btrans)
   /* Create process queue and cvmat queue to transfer data between threads.
    * We will be using this queue to maintain the list of frames/objects
    * currently given to the algorithm for processing. */
-  dsexample->process_queue = g_queue_new ();
-  dsexample->buf_queue = g_queue_new ();
-  dsexample->data_queue = g_queue_new ();
+  dsclipper->process_queue = g_queue_new ();
+  dsclipper->buf_queue = g_queue_new ();
+  dsclipper->data_queue = g_queue_new ();
 
 #ifdef WITH_OPENCV
   /* Push cvmat buffer twice on the buf_queue which will handle the
@@ -415,80 +415,80 @@ gst_dsexample_start (GstBaseTransform * btrans)
    * cvmat queue is used for getting processed data from the process thread*/
   for (int i = 0; i < 2; i++) {
     // CV Mat containing interleaved RGB data.
-    cvmat = new cv::Mat[dsexample->max_batch_size];
+    cvmat = new cv::Mat[dsclipper->max_batch_size];
 
-    for (guint j = 0; j < dsexample->max_batch_size; j++) {
+    for (guint j = 0; j < dsclipper->max_batch_size; j++) {
       cvmat[j] =
-          cv::Mat (dsexample->processing_height, dsexample->processing_width,
+          cv::Mat (dsclipper->processing_height, dsclipper->processing_width,
           CV_8UC3);
     }
 
     if (!cvmat)
       goto error;
 
-    g_queue_push_tail (dsexample->buf_queue, cvmat);
+    g_queue_push_tail (dsclipper->buf_queue, cvmat);
   }
 
-  GST_DEBUG_OBJECT (dsexample, "created CV Mat\n");
+  GST_DEBUG_OBJECT (dsclipper, "created CV Mat\n");
 #else
   for (int i = 0; i < 2; i++) {
-    if (NvBufSurfaceCreate (&inter_buf, dsexample->max_batch_size,
+    if (NvBufSurfaceCreate (&inter_buf, dsclipper->max_batch_size,
           &create_params) != 0) {
-      GST_ERROR ("Error: Could not allocate internal buffer for dsexample");
+      GST_ERROR ("Error: Could not allocate internal buffer for dsclipper");
       goto error;
     }
 
-    g_queue_push_tail (dsexample->buf_queue, inter_buf);
+    g_queue_push_tail (dsclipper->buf_queue, inter_buf);
   }
 #endif
 
   /* Set the NvBufSurfTransform config parameters. */
-  dsexample->transform_config_params.compute_mode =
+  dsclipper->transform_config_params.compute_mode =
       NvBufSurfTransformCompute_Default;
-  dsexample->transform_config_params.gpu_id = dsexample->gpu_id;
+  dsclipper->transform_config_params.gpu_id = dsclipper->gpu_id;
 
   /* Create the intermediate NvBufSurface structure for holding an array of input
    * NvBufSurfaceParams for batched transforms. */
-  dsexample->batch_insurf.surfaceList =
-      new NvBufSurfaceParams[dsexample->max_batch_size];
-  dsexample->batch_insurf.batchSize = dsexample->max_batch_size;
-  dsexample->batch_insurf.gpuId = dsexample->gpu_id;
+  dsclipper->batch_insurf.surfaceList =
+      new NvBufSurfaceParams[dsclipper->max_batch_size];
+  dsclipper->batch_insurf.batchSize = dsclipper->max_batch_size;
+  dsclipper->batch_insurf.gpuId = dsclipper->gpu_id;
 
   /* Set up the NvBufSurfTransformParams structure for batched transforms. */
-  dsexample->transform_params.src_rect =
-      new NvBufSurfTransformRect[dsexample->max_batch_size];
-  dsexample->transform_params.dst_rect =
-      new NvBufSurfTransformRect[dsexample->max_batch_size];
-  dsexample->transform_params.transform_flag =
+  dsclipper->transform_params.src_rect =
+      new NvBufSurfTransformRect[dsclipper->max_batch_size];
+  dsclipper->transform_params.dst_rect =
+      new NvBufSurfTransformRect[dsclipper->max_batch_size];
+  dsclipper->transform_params.transform_flag =
       NVBUFSURF_TRANSFORM_FILTER | NVBUFSURF_TRANSFORM_CROP_SRC |
       NVBUFSURF_TRANSFORM_CROP_DST;
-  dsexample->transform_params.transform_flip = NvBufSurfTransform_None;
-  dsexample->transform_params.transform_filter =
+  dsclipper->transform_params.transform_flip = NvBufSurfTransform_None;
+  dsclipper->transform_params.transform_filter =
       NvBufSurfTransformInter_Default;
 
   /* Start a thread which will pop output from the algorithm, form NvDsMeta and
    * push buffers to the next element. */
-  dsexample->process_thread =
-      g_thread_new ("dsexample-process-thread", gst_dsexample_output_loop,
-      dsexample);
-  dsexample->data_thread =
-      g_thread_new ("dsexample-data-thread", gst_dsexample_data_loop,
-      dsexample);
-  dsexample->nvtx_domain = nvtx_domain_ptr.release ();
+  dsclipper->process_thread =
+      g_thread_new ("dsclipper-process-thread", gst_dsclipper_output_loop,
+      dsclipper);
+  dsclipper->data_thread =
+      g_thread_new ("dsclipper-data-thread", gst_dsclipper_data_loop,
+      dsclipper);
+  dsclipper->nvtx_domain = nvtx_domain_ptr.release ();
 
   return TRUE;
 error:
 
-  delete[]dsexample->transform_params.src_rect;
-  delete[]dsexample->transform_params.dst_rect;
-  delete[]dsexample->batch_insurf.surfaceList;
+  delete[]dsclipper->transform_params.src_rect;
+  delete[]dsclipper->transform_params.dst_rect;
+  delete[]dsclipper->batch_insurf.surfaceList;
 
-  if (dsexample->cuda_stream) {
-    cudaStreamDestroy (dsexample->cuda_stream);
-    dsexample->cuda_stream = NULL;
+  if (dsclipper->cuda_stream) {
+    cudaStreamDestroy (dsclipper->cuda_stream);
+    dsclipper->cuda_stream = NULL;
   }
-  if (dsexample->dsexamplelib_ctx)
-    DsExampleCtxDeinit (dsexample->dsexamplelib_ctx);
+  if (dsclipper->dsclipperlib_ctx)
+    DsClipperCtxDeinit (dsclipper->dsclipperlib_ctx);
   return FALSE;
 }
 
@@ -496,9 +496,9 @@ error:
  * Stop the process thread and free up all the resources
  */
 static gboolean
-gst_dsexample_stop (GstBaseTransform * btrans)
+gst_dsclipper_stop (GstBaseTransform * btrans)
 {
-  GstDsExample *dsexample = GST_DSEXAMPLE (btrans);
+  GstDsClipper *dsclipper = GST_DSCLIPPER (btrans);
 
 #ifdef WITH_OPENCV
   cv::Mat * cvmat;
@@ -506,71 +506,71 @@ gst_dsexample_stop (GstBaseTransform * btrans)
   NvBufSurface * inter_buf;
 #endif
 
-  g_mutex_lock (&dsexample->process_lock);
+  g_mutex_lock (&dsclipper->process_lock);
 
   /* Wait till all the items in the queue are handled. */
-  while (!g_queue_is_empty (dsexample->process_queue)) {
-    g_cond_wait (&dsexample->process_cond, &dsexample->process_lock);
+  while (!g_queue_is_empty (dsclipper->process_queue)) {
+    g_cond_wait (&dsclipper->process_cond, &dsclipper->process_lock);
   }
 
-  g_mutex_lock (&dsexample->data_lock);
-  while (!g_queue_is_empty (dsexample->data_queue)) {
-    g_cond_wait (&dsexample->data_cond, &dsexample->data_lock);
+  g_mutex_lock (&dsclipper->data_lock);
+  while (!g_queue_is_empty (dsclipper->data_queue)) {
+    g_cond_wait (&dsclipper->data_cond, &dsclipper->data_lock);
   }
 
 #ifdef WITH_OPENCV
-  while (!g_queue_is_empty (dsexample->buf_queue)) {
-    cvmat = (cv::Mat *) g_queue_pop_head (dsexample->buf_queue);
+  while (!g_queue_is_empty (dsclipper->buf_queue)) {
+    cvmat = (cv::Mat *) g_queue_pop_head (dsclipper->buf_queue);
     delete[]cvmat;
     cvmat = NULL;
   }
 #else
-  while (!g_queue_is_empty (dsexample->buf_queue)) {
-    inter_buf = (NvBufSurface *) g_queue_pop_head (dsexample->buf_queue);
+  while (!g_queue_is_empty (dsclipper->buf_queue)) {
+    inter_buf = (NvBufSurface *) g_queue_pop_head (dsclipper->buf_queue);
     if (inter_buf)
       NvBufSurfaceDestroy (inter_buf);
     inter_buf = NULL;
   }
 #endif
-  dsexample->stop = TRUE;
+  dsclipper->stop = TRUE;
 
-  g_cond_broadcast (&dsexample->process_cond);
-  g_mutex_unlock (&dsexample->process_lock);
+  g_cond_broadcast (&dsclipper->process_cond);
+  g_mutex_unlock (&dsclipper->process_lock);
 
-  g_cond_broadcast (&dsexample->data_cond);
-  g_mutex_unlock (&dsexample->data_lock);
+  g_cond_broadcast (&dsclipper->data_cond);
+  g_mutex_unlock (&dsclipper->data_lock);
 
-  g_thread_join (dsexample->process_thread);
-  g_thread_join (dsexample->data_thread);
+  g_thread_join (dsclipper->process_thread);
+  g_thread_join (dsclipper->data_thread);
 
 #ifdef WITH_OPENCV
-  if (dsexample->inter_buf)
-    NvBufSurfaceDestroy (dsexample->inter_buf);
-  dsexample->inter_buf = NULL;
+  if (dsclipper->inter_buf)
+    NvBufSurfaceDestroy (dsclipper->inter_buf);
+  dsclipper->inter_buf = NULL;
 #endif
 
-  if (dsexample->cuda_stream)
-    cudaStreamDestroy (dsexample->cuda_stream);
-  dsexample->cuda_stream = NULL;
+  if (dsclipper->cuda_stream)
+    cudaStreamDestroy (dsclipper->cuda_stream);
+  dsclipper->cuda_stream = NULL;
 
-  delete[]dsexample->transform_params.src_rect;
-  delete[]dsexample->transform_params.dst_rect;
-  delete[]dsexample->batch_insurf.surfaceList;
+  delete[]dsclipper->transform_params.src_rect;
+  delete[]dsclipper->transform_params.dst_rect;
+  delete[]dsclipper->batch_insurf.surfaceList;
 
 #ifdef WITH_OPENCV
-  GST_DEBUG_OBJECT (dsexample, "deleted CV Mat \n");
+  GST_DEBUG_OBJECT (dsclipper, "deleted CV Mat \n");
 #endif
 
   // Deinit the algorithm library
-  DsExampleCtxDeinit (dsexample->dsexamplelib_ctx);
-  dsexample->dsexamplelib_ctx = NULL;
+  DsClipperCtxDeinit (dsclipper->dsclipperlib_ctx);
+  dsclipper->dsclipperlib_ctx = NULL;
 
-  GST_DEBUG_OBJECT (dsexample, "ctx lib released \n");
+  GST_DEBUG_OBJECT (dsclipper, "ctx lib released \n");
 
-  g_queue_free (dsexample->process_queue);
-  g_queue_free (dsexample->data_queue);
+  g_queue_free (dsclipper->process_queue);
+  g_queue_free (dsclipper->data_queue);
 
-  g_queue_free (dsexample->buf_queue);
+  g_queue_free (dsclipper->buf_queue);
   
   return TRUE;
 }
@@ -579,14 +579,14 @@ gst_dsexample_stop (GstBaseTransform * btrans)
  * Called when source / sink pad capabilities have been negotiated.
  */
 static gboolean
-gst_dsexample_set_caps (GstBaseTransform * btrans, GstCaps * incaps,
+gst_dsclipper_set_caps (GstBaseTransform * btrans, GstCaps * incaps,
     GstCaps * outcaps)
 {
-  GstDsExample *dsexample = GST_DSEXAMPLE (btrans);
+  GstDsClipper *dsclipper = GST_DSCLIPPER (btrans);
   /* Save the input video information, since this will be required later. */
-  gst_video_info_from_caps (&dsexample->video_info, incaps);
+  gst_video_info_from_caps (&dsclipper->video_info, incaps);
 
-  CHECK_CUDA_STATUS (cudaSetDevice (dsexample->gpu_id),
+  CHECK_CUDA_STATUS (cudaSetDevice (dsclipper->gpu_id),
       "Unable to set cuda device");
 
   return TRUE;
@@ -600,7 +600,7 @@ error:
  * Or crop and scale objects to the processing resolution maintaining the aspect
  * ratio and fills data for batched conversation */
 static GstFlowReturn
-scale_and_fill_data(GstDsExample * dsexample,
+scale_and_fill_data(GstDsClipper * dsclipper,
     NvBufSurfaceParams * src_frame, NvOSD_RectParams * crop_rect_params,
     gdouble & ratio, gint input_width, gint input_height)
 {
@@ -611,23 +611,23 @@ scale_and_fill_data(GstDsExample * dsexample,
   gint src_height = GST_ROUND_DOWN_2((unsigned int)crop_rect_params->height);
 
   // Maintain aspect ratio
-  double hdest = dsexample->processing_width * src_height / (double) src_width;
-  double wdest = dsexample->processing_height * src_width / (double) src_height;
+  double hdest = dsclipper->processing_width * src_height / (double) src_width;
+  double wdest = dsclipper->processing_height * src_width / (double) src_height;
   guint dest_width, dest_height;
 
-  if (hdest <= dsexample->processing_height) {
-    dest_width = dsexample->processing_width;
+  if (hdest <= dsclipper->processing_height) {
+    dest_width = dsclipper->processing_width;
     dest_height = hdest;
   } else {
     dest_width = wdest;
-    dest_height = dsexample->processing_height;
+    dest_height = dsclipper->processing_height;
   }
 
   // Calculate scaling ratio while maintaining aspect ratio
   ratio = MIN (1.0 * dest_width / src_width, 1.0 * dest_height / src_height);
 
   if ((crop_rect_params->width == 0) || (crop_rect_params->height == 0)) {
-    GST_ELEMENT_ERROR (dsexample, STREAM, FAILED,
+    GST_ELEMENT_ERROR (dsclipper, STREAM, FAILED,
         ("%s:crop_rect_params dimensions are zero", __func__), (NULL));
     return GST_FLOW_ERROR;
   }
@@ -641,27 +641,27 @@ scale_and_fill_data(GstDsExample * dsexample,
   /* We will first convert only the Region of Interest (the entire frame or the
    * object bounding box) to RGB and then scale the converted RGB frame to
    * processing resolution. */
-  GST_DEBUG_OBJECT (dsexample, "Scaling and converting input buffer\n");
+  GST_DEBUG_OBJECT (dsclipper, "Scaling and converting input buffer\n");
 
   /* Create temporary src and dest surfaces for NvBufSurfTransform API. */
-  dsexample->batch_insurf.surfaceList[dsexample->batch_insurf.numFilled] = *src_frame;
+  dsclipper->batch_insurf.surfaceList[dsclipper->batch_insurf.numFilled] = *src_frame;
 
   /* Set the source ROI. Could be entire frame or an object. */
-  dsexample->transform_params.src_rect[dsexample->batch_insurf.numFilled] = {
+  dsclipper->transform_params.src_rect[dsclipper->batch_insurf.numFilled] = {
   (guint) src_top, (guint) src_left, (guint) src_width, (guint) src_height};
   /* Set the dest ROI. Could be the entire destination frame or part of it to
    * maintain aspect ratio. */
-  dsexample->transform_params.dst_rect[dsexample->batch_insurf.numFilled] = {
+  dsclipper->transform_params.dst_rect[dsclipper->batch_insurf.numFilled] = {
   0, 0, dest_width, dest_height};
 
-  dsexample->batch_insurf.numFilled++;
+  dsclipper->batch_insurf.numFilled++;
 
   return GST_FLOW_OK;
 }
 
 static gboolean
-convert_batch_and_push_to_process_thread (GstDsExample * dsexample,
-    GstDsExampleBatch * batch)
+convert_batch_and_push_to_process_thread (GstDsClipper * dsclipper,
+    GstDsClipperBatch * batch)
 {
 
   NvBufSurfTransform_Error err;
@@ -673,12 +673,12 @@ convert_batch_and_push_to_process_thread (GstDsExample * dsexample,
 
   // Configure transform session parameters for the transformation
   transform_config_params.compute_mode = NvBufSurfTransformCompute_Default;
-  transform_config_params.gpu_id = dsexample->gpu_id;
-  transform_config_params.cuda_stream = dsexample->cuda_stream;
+  transform_config_params.gpu_id = dsclipper->gpu_id;
+  transform_config_params.cuda_stream = dsclipper->cuda_stream;
 
   err = NvBufSurfTransformSetSessionParams (&transform_config_params);
   if (err != NvBufSurfTransformError_Success) {
-    GST_ELEMENT_ERROR (dsexample, STREAM, FAILED,
+    GST_ELEMENT_ERROR (dsclipper, STREAM, FAILED,
         ("NvBufSurfTransformSetSessionParams failed with error %d", err),
         (NULL));
     return FALSE;
@@ -690,43 +690,43 @@ convert_batch_and_push_to_process_thread (GstDsExample * dsexample,
   eventAttrib.colorType = NVTX_COLOR_ARGB;
   eventAttrib.color = 0xFFFF0000;
   eventAttrib.messageType = NVTX_MESSAGE_TYPE_ASCII;
-  nvtx_str = "convert_buf batch_num=" + std::to_string(dsexample->current_batch_num);
+  nvtx_str = "convert_buf batch_num=" + std::to_string(dsclipper->current_batch_num);
   eventAttrib.message.ascii = nvtx_str.c_str();
 
-  nvtxDomainRangePushEx(dsexample->nvtx_domain, &eventAttrib);
+  nvtxDomainRangePushEx(dsclipper->nvtx_domain, &eventAttrib);
 
-  g_mutex_lock (&dsexample->process_lock);
+  g_mutex_lock (&dsclipper->process_lock);
 
   /* Wait if buf queue is empty. */
-  while (g_queue_is_empty (dsexample->buf_queue)) {
-    g_cond_wait (&dsexample->buf_cond, &dsexample->process_lock);
+  while (g_queue_is_empty (dsclipper->buf_queue)) {
+    g_cond_wait (&dsclipper->buf_cond, &dsclipper->process_lock);
   }
 
 #ifdef WITH_OPENCV
   /* Pop a buffer from the element's buf queue. */
-  batch->cvmat = (cv::Mat *) g_queue_pop_head (dsexample->buf_queue);
+  batch->cvmat = (cv::Mat *) g_queue_pop_head (dsclipper->buf_queue);
 #else
   /* Pop a buffer from the element's buf queue. */
-  batch->inter_buf = (NvBufSurface *) g_queue_pop_head (dsexample->buf_queue);
-  dsexample->inter_buf = batch->inter_buf;
+  batch->inter_buf = (NvBufSurface *) g_queue_pop_head (dsclipper->buf_queue);
+  dsclipper->inter_buf = batch->inter_buf;
 #endif
 
-  g_mutex_unlock (&dsexample->process_lock);
+  g_mutex_unlock (&dsclipper->process_lock);
 
   //Memset the memory
-  for (uint i = 0; i < dsexample->batch_insurf.numFilled; i++)
-    NvBufSurfaceMemSet (dsexample->inter_buf, i, 0, 0);
+  for (uint i = 0; i < dsclipper->batch_insurf.numFilled; i++)
+    NvBufSurfaceMemSet (dsclipper->inter_buf, i, 0, 0);
 
-  printf("convert func, frame size: %d\n", dsexample->batch_insurf.numFilled);
+  printf("convert func, frame size: %d\n", dsclipper->batch_insurf.numFilled);
 
   /* Batched tranformation. */
-  err = NvBufSurfTransform (&dsexample->batch_insurf, dsexample->inter_buf,
-      &dsexample->transform_params);
+  err = NvBufSurfTransform (&dsclipper->batch_insurf, dsclipper->inter_buf,
+      &dsclipper->transform_params);
 
-  nvtxDomainRangePop (dsexample->nvtx_domain);
+  nvtxDomainRangePop (dsclipper->nvtx_domain);
 
   if (err != NvBufSurfTransformError_Success) {
-    GST_ELEMENT_ERROR (dsexample, STREAM, FAILED,
+    GST_ELEMENT_ERROR (dsclipper, STREAM, FAILED,
         ("NvBufSurfTransform failed with error %d while converting buffer",
             err), (NULL));
     return FALSE;
@@ -734,19 +734,19 @@ convert_batch_and_push_to_process_thread (GstDsExample * dsexample,
 
    /* Push the batch info structure in the processing queue and notify the process
    * thread that a new batch has been queued. */
-  g_mutex_lock (&dsexample->process_lock);
+  g_mutex_lock (&dsclipper->process_lock);
 
-  g_queue_push_tail (dsexample->process_queue, batch);
-  g_cond_broadcast (&dsexample->process_cond);
+  g_queue_push_tail (dsclipper->process_queue, batch);
+  g_cond_broadcast (&dsclipper->process_cond);
 
-  g_mutex_unlock (&dsexample->process_lock);
+  g_mutex_unlock (&dsclipper->process_lock);
 
-  g_mutex_lock (&dsexample->data_lock);
+  g_mutex_lock (&dsclipper->data_lock);
 
-  g_queue_push_tail (dsexample->data_queue, batch);
-  g_cond_broadcast (&dsexample->data_cond);
+  g_queue_push_tail (dsclipper->data_queue, batch);
+  g_cond_broadcast (&dsclipper->data_cond);
 
-  g_mutex_unlock (&dsexample->data_lock);
+  g_mutex_unlock (&dsclipper->data_lock);
 
   return TRUE;
 }
@@ -755,23 +755,23 @@ convert_batch_and_push_to_process_thread (GstDsExample * dsexample,
  * Called when element recieves an input buffer from upstream element.
  */
 static GstFlowReturn
-gst_dsexample_submit_input_buffer (GstBaseTransform * btrans,
+gst_dsclipper_submit_input_buffer (GstBaseTransform * btrans,
     gboolean discont, GstBuffer * inbuf)
 {
-  GstDsExample *dsexample = GST_DSEXAMPLE (btrans);
+  GstDsClipper *dsclipper = GST_DSCLIPPER (btrans);
   GstMapInfo in_map_info;
   NvBufSurface *in_surf;
-  GstDsExampleBatch *buf_push_batch;
+  GstDsClipperBatch *buf_push_batch;
   GstFlowReturn flow_ret;
   std::string nvtx_str;
-  std::unique_ptr < GstDsExampleBatch > batch = nullptr;
+  std::unique_ptr < GstDsClipperBatch > batch = nullptr;
 
   NvDsBatchMeta *batch_meta = NULL;
   guint i = 0;
   gdouble scale_ratio = 1.0;
   guint num_filled = 0;
 
-  dsexample->current_batch_num++;
+  dsclipper->current_batch_num++;
 
   nvtxEventAttributes_t eventAttrib = {0};
   eventAttrib.version = NVTX_VERSION;
@@ -779,25 +779,25 @@ gst_dsexample_submit_input_buffer (GstBaseTransform * btrans,
   eventAttrib.colorType = NVTX_COLOR_ARGB;
   eventAttrib.color = 0xFFFF0000;
   eventAttrib.messageType = NVTX_MESSAGE_TYPE_ASCII;
-  nvtx_str = "buffer_process batch_num=" + std::to_string(dsexample->current_batch_num);
+  nvtx_str = "buffer_process batch_num=" + std::to_string(dsclipper->current_batch_num);
   eventAttrib.message.ascii = nvtx_str.c_str();
-  nvtxRangeId_t buf_process_range = nvtxDomainRangeStartEx(dsexample->nvtx_domain, &eventAttrib);
+  nvtxRangeId_t buf_process_range = nvtxDomainRangeStartEx(dsclipper->nvtx_domain, &eventAttrib);
 
   memset (&in_map_info, 0, sizeof (in_map_info));
 
   /* Map the buffer contents and get the pointer to NvBufSurface. */
   if (!gst_buffer_map (inbuf, &in_map_info, GST_MAP_READ)) {
-    GST_ELEMENT_ERROR (dsexample, STREAM, FAILED,
+    GST_ELEMENT_ERROR (dsclipper, STREAM, FAILED,
         ("%s:gst buffer map to get pointer to NvBufSurface failed", __func__), (NULL));
     return GST_FLOW_ERROR;
   }
   in_surf = (NvBufSurface *) in_map_info.data;
 
-  nvds_set_input_system_timestamp (inbuf, GST_ELEMENT_NAME (dsexample));
+  nvds_set_input_system_timestamp (inbuf, GST_ELEMENT_NAME (dsclipper));
 
   batch_meta = gst_buffer_get_nvds_batch_meta (inbuf);
   if (batch_meta == nullptr) {
-    GST_ELEMENT_ERROR (dsexample, STREAM, FAILED,
+    GST_ELEMENT_ERROR (dsclipper, STREAM, FAILED,
         ("NvDsBatchMeta not found for input buffer."), (NULL));
     return GST_FLOW_ERROR;
   }
@@ -826,7 +826,7 @@ gst_dsexample_submit_input_buffer (GstBaseTransform * btrans,
           obj_meta->rect_params.height < MIN_INPUT_OBJECT_HEIGHT)
         continue;
 
-      if (obj_meta->class_id == 0 && g_queue_get_length(dsexample->data_queue) < MAX_QUEUE_SIZE) {
+      if (obj_meta->class_id == 0 && g_queue_get_length(dsclipper->data_queue) < MAX_QUEUE_SIZE) {
         NvBufSurfaceParams * currentFrameParams = in_surf->surfaceList + frame_meta->batch_id;
         NvBufSurfaceColorFormat colorFormat = currentFrameParams->colorFormat;
         size_t framePitch = currentFrameParams->pitch;
@@ -889,36 +889,36 @@ gst_dsexample_submit_input_buffer (GstBaseTransform * btrans,
         
 
         
-        g_mutex_lock (&dsexample->data_lock);
-        g_queue_push_tail (dsexample->data_queue, host_ptr);
-        g_queue_push_tail (dsexample->data_queue, info);
-        g_mutex_unlock (&dsexample->data_lock);
+        g_mutex_lock (&dsclipper->data_lock);
+        g_queue_push_tail (dsclipper->data_queue, host_ptr);
+        g_queue_push_tail (dsclipper->data_queue, info);
+        g_mutex_unlock (&dsclipper->data_lock);
         break;
       }
     }
   }
   
-  nvtxDomainRangeEnd(dsexample->nvtx_domain, buf_process_range);
+  nvtxDomainRangeEnd(dsclipper->nvtx_domain, buf_process_range);
 
   /* Queue a push buffer batch. This batch is not inferred. This batch is to
    * signal the process thread that there are no more batches
    * belonging to this input buffer and this GstBuffer can be pushed to
    * downstream element once all the previous processing is done. */
-  buf_push_batch = new GstDsExampleBatch;
+  buf_push_batch = new GstDsClipperBatch;
   buf_push_batch->inbuf = inbuf;
   buf_push_batch->push_buffer = TRUE;
   buf_push_batch->nvtx_complete_buf_range = buf_process_range;
 
-  g_mutex_lock (&dsexample->process_lock);
+  g_mutex_lock (&dsclipper->process_lock);
   /* Check if this is a push buffer or event marker batch. If yes, no need to
    * queue the input for inferencing. */
   if (buf_push_batch->push_buffer) {
     /* Push the batch info structure in the processing queue and notify the
      * process thread that a new batch has been queued. */
-    g_queue_push_tail (dsexample->process_queue, buf_push_batch);
-    g_cond_broadcast (&dsexample->process_cond);
+    g_queue_push_tail (dsclipper->process_queue, buf_push_batch);
+    g_cond_broadcast (&dsclipper->process_cond);
   }
-  g_mutex_unlock (&dsexample->process_lock);
+  g_mutex_unlock (&dsclipper->process_lock);
 
   flow_ret = GST_FLOW_OK;
 
@@ -934,27 +934,27 @@ error:
  * be caught by the application.
  */
 static GstFlowReturn
-gst_dsexample_generate_output (GstBaseTransform * btrans, GstBuffer ** outbuf)
+gst_dsclipper_generate_output (GstBaseTransform * btrans, GstBuffer ** outbuf)
 {
-  GstDsExample *dsexample = GST_DSEXAMPLE (btrans);
-  return dsexample->last_flow_ret;
+  GstDsClipper *dsclipper = GST_DSCLIPPER (btrans);
+  return dsclipper->last_flow_ret;
 }
 
 /**
  * Attach metadata for the full frame. We will be adding a new metadata.
  */
 static void
-attach_metadata_full_frame (GstDsExample * dsexample,
-    NvDsFrameMeta * frame_meta, gdouble scale_ratio, DsExampleOutput * output,
+attach_metadata_full_frame (GstDsClipper * dsclipper,
+    NvDsFrameMeta * frame_meta, gdouble scale_ratio, DsClipperOutput * output,
     guint batch_id)
 {
   NvDsBatchMeta *batch_meta = frame_meta->base_meta.batch_meta;
   NvDsObjectMeta *object_meta = NULL;
   static gchar font_name[] = "Serif";
-  GST_DEBUG_OBJECT (dsexample, "Attaching metadata %d\n", output->numObjects);
+  GST_DEBUG_OBJECT (dsclipper, "Attaching metadata %d\n", output->numObjects);
 
   for (gint i = 0; i < output->numObjects; i++) {
-    DsExampleObject *obj = &output->object[i];
+    DsClipperObject *obj = &output->object[i];
     object_meta = nvds_acquire_obj_meta_from_pool (batch_meta);
     NvOSD_RectParams & rect_params = object_meta->rect_params;
     NvOSD_TextParams & text_params = object_meta->text_params;
@@ -980,7 +980,7 @@ attach_metadata_full_frame (GstDsExample * dsexample,
     rect_params.top /= scale_ratio;
     rect_params.width /= scale_ratio;
     rect_params.height /= scale_ratio;
-    GST_DEBUG_OBJECT (dsexample, "Attaching rect%d of batch%u"
+    GST_DEBUG_OBJECT (dsclipper, "Attaching rect%d of batch%u"
         "  left->%f top->%f width->%f"
         " height->%f label->%s\n", i, batch_id, rect_params.left,
         rect_params.top, rect_params.width, rect_params.height, obj->label);
@@ -1011,8 +1011,8 @@ attach_metadata_full_frame (GstDsExample * dsexample,
  * We assume only one label per object is generated
  */
 static void
-attach_metadata_object (GstDsExample * dsexample, NvDsObjectMeta * obj_meta,
-    DsExampleOutput * output)
+attach_metadata_object (GstDsClipper * dsclipper, NvDsObjectMeta * obj_meta,
+    DsClipperOutput * output)
 {
   if (output->numObjects == 0)
     return;
@@ -1021,7 +1021,7 @@ attach_metadata_object (GstDsExample * dsexample, NvDsObjectMeta * obj_meta,
   NvDsClassifierMeta *classifier_meta =
       nvds_acquire_classifier_meta_from_pool (batch_meta);
 
-  classifier_meta->unique_component_id = dsexample->unique_id;
+  classifier_meta->unique_component_id = dsclipper->unique_id;
 
   NvDsLabelInfo *label_info =
       nvds_acquire_label_info_meta_from_pool (batch_meta);
@@ -1064,10 +1064,10 @@ attach_metadata_object (GstDsExample * dsexample, NvDsObjectMeta * obj_meta,
  * buffer in form of NvDsMeta and push the buffer to downstream element.
  */
 static gpointer
-gst_dsexample_output_loop (gpointer data)
+gst_dsclipper_output_loop (gpointer data)
 {
-  GstDsExample *dsexample = GST_DSEXAMPLE (data);
-  DsExampleOutput *output;
+  GstDsClipper *dsclipper = GST_DSCLIPPER (data);
+  DsClipperOutput *output;
   NvDsObjectMeta *obj_meta = NULL;
   gdouble scale_ratio = 1.0;
 
@@ -1080,51 +1080,51 @@ gst_dsexample_output_loop (gpointer data)
   std::string nvtx_str;
 
   nvtx_str =
-      "gst-dsexample_output-loop_uid=" + std::to_string (dsexample->unique_id);
+      "gst-dsclipper_output-loop_uid=" + std::to_string (dsclipper->unique_id);
 
-  g_mutex_lock (&dsexample->process_lock);
+  g_mutex_lock (&dsclipper->process_lock);
 
   /* Run till signalled to stop. */
-  while (!dsexample->stop) {
-    std::unique_ptr < GstDsExampleBatch > batch = nullptr;
+  while (!dsclipper->stop) {
+    std::unique_ptr < GstDsClipperBatch > batch = nullptr;
 
     /* Wait if processing queue is empty. */
-    if (g_queue_is_empty (dsexample->process_queue)) {
-      g_cond_wait (&dsexample->process_cond, &dsexample->process_lock);
+    if (g_queue_is_empty (dsclipper->process_queue)) {
+      g_cond_wait (&dsclipper->process_cond, &dsclipper->process_lock);
       continue;
     }
 
     /* Pop a batch from the element's process queue. */
-    batch.reset ((GstDsExampleBatch *)
-        g_queue_pop_head (dsexample->process_queue));
-    g_cond_broadcast (&dsexample->process_cond);
+    batch.reset ((GstDsClipperBatch *)
+        g_queue_pop_head (dsclipper->process_queue));
+    g_cond_broadcast (&dsclipper->process_cond);
 
     /* Event marker used for synchronization. No need to process further. */
     if (batch->event_marker) {
       continue;
     }
 
-    g_mutex_unlock (&dsexample->process_lock);
+    g_mutex_unlock (&dsclipper->process_lock);
 
     /* Need to only push buffer to downstream element. This batch was not
      * actually submitted for inferencing. */
     if (batch->push_buffer) {
-      nvtxDomainRangeEnd(dsexample->nvtx_domain, batch->nvtx_complete_buf_range);
+      nvtxDomainRangeEnd(dsclipper->nvtx_domain, batch->nvtx_complete_buf_range);
 
       nvds_set_output_system_timestamp (batch->inbuf,
-          GST_ELEMENT_NAME (dsexample));
+          GST_ELEMENT_NAME (dsclipper));
 
       GstFlowReturn flow_ret =
-          gst_pad_push (GST_BASE_TRANSFORM_SRC_PAD (dsexample),
+          gst_pad_push (GST_BASE_TRANSFORM_SRC_PAD (dsclipper),
           batch->inbuf);
-      if (dsexample->last_flow_ret != flow_ret) {
+      if (dsclipper->last_flow_ret != flow_ret) {
         switch (flow_ret) {
             /* Signal the application for pad push errors by posting a error message
              * on the pipeline bus. */
           case GST_FLOW_ERROR:
           case GST_FLOW_NOT_LINKED:
           case GST_FLOW_NOT_NEGOTIATED:
-            GST_ELEMENT_ERROR (dsexample, STREAM, FAILED,
+            GST_ELEMENT_ERROR (dsclipper, STREAM, FAILED,
                 ("Internal data stream error."),
                 ("streaming stopped, reason %s (%d)",
                     gst_flow_get_name (flow_ret), flow_ret));
@@ -1133,27 +1133,27 @@ gst_dsexample_output_loop (gpointer data)
             break;
         }
       }
-      dsexample->last_flow_ret = flow_ret;
-      g_mutex_lock (&dsexample->process_lock);
+      dsclipper->last_flow_ret = flow_ret;
+      g_mutex_lock (&dsclipper->process_lock);
       continue;
     }
 
     nvtx_str = "dequeueOutputAndAttachMeta batch_num=" + std::to_string(batch->inbuf_batch_num);
     eventAttrib.message.ascii = nvtx_str.c_str();
-    nvtxDomainRangePushEx(dsexample->nvtx_domain, &eventAttrib);
+    nvtxDomainRangePushEx(dsclipper->nvtx_domain, &eventAttrib);
 
-    g_mutex_lock (&dsexample->process_lock);
+    g_mutex_lock (&dsclipper->process_lock);
 
 #ifdef WITH_OPENCV
-    g_queue_push_tail (dsexample->buf_queue, batch->cvmat);
+    g_queue_push_tail (dsclipper->buf_queue, batch->cvmat);
 #else
-    g_queue_push_tail (dsexample->buf_queue, batch->inter_buf);
+    g_queue_push_tail (dsclipper->buf_queue, batch->inter_buf);
 #endif
-    g_cond_broadcast (&dsexample->buf_cond);
+    g_cond_broadcast (&dsclipper->buf_cond);
 
-    nvtxDomainRangePop (dsexample->nvtx_domain);
+    nvtxDomainRangePop (dsclipper->nvtx_domain);
   }
-  g_mutex_unlock (&dsexample->process_lock);
+  g_mutex_unlock (&dsclipper->process_lock);
 
   return nullptr;
 }
@@ -1177,10 +1177,10 @@ void saveImageToRaw(const char* filename, void* data, size_t dataSize, int width
 }
 
 static gpointer
-gst_dsexample_data_loop (gpointer data)
+gst_dsclipper_data_loop (gpointer data)
 {
-  GstDsExample *dsexample = GST_DSEXAMPLE (data);
-  // DsExampleOutput *output;
+  GstDsClipper *dsclipper = GST_DSCLIPPER (data);
+  // DsClipperOutput *output;
   NvDsObjectMeta *obj_meta = NULL;
   gdouble scale_ratio = 1.0;
   auto start_time = std::chrono::system_clock::now();
@@ -1198,22 +1198,22 @@ gst_dsexample_data_loop (gpointer data)
   std::string nvtx_str;
 
   nvtx_str =
-      "gst-dsexample_output-loop_uid=" + std::to_string (dsexample->unique_id);
+      "gst-dsclipper_output-loop_uid=" + std::to_string (dsclipper->unique_id);
 
 
   /* Run till signalled to stop. */
-  while (!dsexample->stop) {
+  while (!dsclipper->stop) {
     // sleep 1 second
     g_usleep(1000);
-    if (g_queue_is_empty (dsexample->data_queue)) {
+    if (g_queue_is_empty (dsclipper->data_queue)) {
       continue;
     }
     
-    g_mutex_lock (&dsexample->data_lock);
+    g_mutex_lock (&dsclipper->data_lock);
     
-    host_ptr = g_queue_pop_head(dsexample->data_queue);
-    HostFrameInfo *info = (HostFrameInfo *) g_queue_pop_head (dsexample->data_queue);
-    g_mutex_unlock (&dsexample->data_lock);
+    host_ptr = g_queue_pop_head(dsclipper->data_queue);
+    HostFrameInfo *info = (HostFrameInfo *) g_queue_pop_head (dsclipper->data_queue);
+    g_mutex_unlock (&dsclipper->data_lock);
 
     printf("pop info: %d %d %ld %ld\n", info->width, info->height, info->pitch, info->dataSize);
 
@@ -1241,7 +1241,7 @@ gst_dsexample_data_loop (gpointer data)
 
     // nvtx_str = "dequeueOutputAndAttachMeta batch_num=" + std::to_string(batch->inbuf_batch_num);
     // eventAttrib.message.ascii = nvtx_str.c_str();
-    // nvtxDomainRangePushEx(dsexample->nvtx_domain, &eventAttrib);
+    // nvtxDomainRangePushEx(dsclipper->nvtx_domain, &eventAttrib);
 
     // static guint cnt = 0;
     // void *host_ptr = NULL;
@@ -1278,16 +1278,16 @@ gst_dsexample_data_loop (gpointer data)
       
     // }
     
-//     g_mutex_lock (&dsexample->data_lock);
+//     g_mutex_lock (&dsclipper->data_lock);
 
 // #ifdef WITH_OPENCV
-//     g_queue_push_tail (dsexample->buf_queue, batch->cvmat);
+//     g_queue_push_tail (dsclipper->buf_queue, batch->cvmat);
 // #else
-//     g_queue_push_tail (dsexample->buf_queue, batch->inter_buf);
+//     g_queue_push_tail (dsclipper->buf_queue, batch->inter_buf);
 // #endif
-//     g_cond_broadcast (&dsexample->buf_cond);
+//     g_cond_broadcast (&dsclipper->buf_cond);
 
-//     nvtxDomainRangePop (dsexample->nvtx_domain);
+//     nvtxDomainRangePop (dsclipper->nvtx_domain);
 //     printf("data done\n");
   }
 
@@ -1300,17 +1300,18 @@ gst_dsexample_data_loop (gpointer data)
  * Boiler plate for registering a plugin and an element.
  */
 static gboolean
-dsexample_plugin_init (GstPlugin * plugin)
+dsclipper_plugin_init (GstPlugin * plugin)
 {
-  GST_DEBUG_CATEGORY_INIT (gst_dsexample_debug, "dsexample", 0,
-      "dsexample plugin");
+  GST_DEBUG_CATEGORY_INIT (gst_dsclipper_debug, "dsclipper", 0,
+      "dsclipper plugin");
 
-  return gst_element_register (plugin, "dsexample", GST_RANK_PRIMARY,
-      GST_TYPE_DSEXAMPLE);
+  return gst_element_register (plugin, "dsclipper", GST_RANK_PRIMARY,
+      GST_TYPE_DSCLIPPER);
 }
 
 GST_PLUGIN_DEFINE (GST_VERSION_MAJOR,
     GST_VERSION_MINOR,
-    nvdsgst_dsexample,
-    DESCRIPTION, dsexample_plugin_init, "6.3", LICENSE, BINARY_PACKAGE,
+    nvdsgst_dsclipper,
+    DESCRIPTION, dsclipper_plugin_init, "6.3", LICENSE, BINARY_PACKAGE,
     URL)
+
