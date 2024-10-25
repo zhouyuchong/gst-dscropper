@@ -20,8 +20,8 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
-#ifndef __GST_DSEXAMPLE_H__
-#define __GST_DSEXAMPLE_H__
+#ifndef __GST_DSCLIPPER_H__
+#define __GST_DSCLIPPER_H__
 
 #include <gst/base/gstbasetransform.h>
 #include <gst/video/video.h>
@@ -38,7 +38,7 @@
 #include "nvbufsurftransform.h"
 #include "gst-nvquery.h"
 #include "gstnvdsmeta.h"
-#include "dsexample_lib/dsexample_lib.h"
+#include "dsclipper_lib/dsclipper_lib.h"
 #include "nvtx3/nvToolsExt.h"
 
 #include "nppi.h"
@@ -50,7 +50,7 @@
 #include <vector>
 
 /* Package and library details required for plugin_init */
-#define PACKAGE "dsexample"
+#define PACKAGE "dsclipper"
 #define VERSION "1.0"
 #define LICENSE "Proprietary"
 #define DESCRIPTION "NVIDIA example plugin for integration with DeepStream on DGPU/Jetson"
@@ -60,27 +60,27 @@
 
 G_BEGIN_DECLS
 /* Standard boilerplate stuff */
-typedef struct _GstDsExample GstDsExample;
-typedef struct _GstDsExampleClass GstDsExampleClass;
+typedef struct _GstDsClipper GstDsClipper;
+typedef struct _GstDsClipperClass GstDsClipperClass;
 
 /* Standard boilerplate stuff */
-#define GST_TYPE_DSEXAMPLE (gst_dsexample_get_type())
-#define GST_DSEXAMPLE(obj) (G_TYPE_CHECK_INSTANCE_CAST((obj),GST_TYPE_DSEXAMPLE,GstDsExample))
-#define GST_DSEXAMPLE_CLASS(klass) (G_TYPE_CHECK_CLASS_CAST((klass),GST_TYPE_DSEXAMPLE,GstDsExampleClass))
-#define GST_DSEXAMPLE_GET_CLASS(obj) (G_TYPE_INSTANCE_GET_CLASS((obj), GST_TYPE_DSEXAMPLE, GstDsExampleClass))
-#define GST_IS_DSEXAMPLE(obj) (G_TYPE_CHECK_INSTANCE_TYPE((obj),GST_TYPE_DSEXAMPLE))
-#define GST_IS_DSEXAMPLE_CLASS(klass) (G_TYPE_CHECK_CLASS_TYPE((klass),GST_TYPE_DSEXAMPLE))
-#define GST_DSEXAMPLE_CAST(obj)  ((GstDsExample *)(obj))
+#define GST_TYPE_DSCLIPPER (gst_dsclipper_get_type())
+#define GST_DSCLIPPER(obj) (G_TYPE_CHECK_INSTANCE_CAST((obj),GST_TYPE_DSCLIPPER,GstDsClipper))
+#define GST_DSCLIPPER_CLASS(klass) (G_TYPE_CHECK_CLASS_CAST((klass),GST_TYPE_DSCLIPPER,GstDsClipperClass))
+#define GST_DSCLIPPER_GET_CLASS(obj) (G_TYPE_INSTANCE_GET_CLASS((obj), GST_TYPE_DSCLIPPER, GstDsClipperClass))
+#define GST_IS_DSCLIPPER(obj) (G_TYPE_CHECK_INSTANCE_TYPE((obj),GST_TYPE_DSCLIPPER))
+#define GST_IS_DSCLIPPER_CLASS(klass) (G_TYPE_CHECK_CLASS_TYPE((klass),GST_TYPE_DSCLIPPER))
+#define GST_DSCLIPPER_CAST(obj)  ((GstDsClipper *)(obj))
 
-/** Maximum batch size to be supported by dsexample. */
-#define NVDSEXAMPLE_MAX_BATCH_SIZE G_MAXUINT
+/** Maximum batch size to be supported by dsclipper. */
+#define NVDSCLIPPER_MAX_BATCH_SIZE G_MAXUINT
 
-struct _GstDsExample
+struct _GstDsClipper
 {
   GstBaseTransform base_trans;
 
   /** Context of the custom algorithm library */
-  DsExampleCtx *dsexamplelib_ctx;
+  DsExampleCtx *dsclipperlib_ctx;
 
   /** Processing Queue and related synchronization structures. */
 
@@ -181,7 +181,7 @@ typedef struct
   gulong frame_num = 0;
   /** The buffer structure the object / frame was converted from. */
   NvBufSurfaceParams *input_surf_params = nullptr;
-} GstDsExampleFrame;
+} GstDsClipperFrame;
 
 /**
  * Holds information about the batch of frames to be inferred.
@@ -189,7 +189,7 @@ typedef struct
 typedef struct
 {
   /** Vector of frames in the batch. */
-  std::vector < GstDsExampleFrame > frames;
+  std::vector < GstDsClipperFrame > frames;
   /** Pointer to the input GstBuffer. */
   GstBuffer *inbuf = nullptr;
   /** Batch number of the input batch. */
@@ -212,7 +212,7 @@ typedef struct
 #endif
 
   nvtxRangeId_t nvtx_complete_buf_range = 0;
-} GstDsExampleBatch;
+} GstDsClipperBatch;
 
 typedef struct
 {
@@ -224,12 +224,12 @@ typedef struct
 } HostFrameInfo;
 
 /** Boiler plate stuff */
-struct _GstDsExampleClass
+struct _GstDsClipperClass
 {
   GstBaseTransformClass parent_class;
 };
 
-GType gst_dsexample_get_type (void);
+GType gst_dsclipper_get_type (void);
 
 G_END_DECLS
-#endif /* __GST_DSEXAMPLE_H__ */
+#endif /* __GST_DSCLIPPER_H__ */
