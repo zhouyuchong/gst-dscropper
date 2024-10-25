@@ -38,7 +38,6 @@
 #include "nvbufsurftransform.h"
 #include "gst-nvquery.h"
 #include "gstnvdsmeta.h"
-#include "dsclipper_lib/dsclipper_lib.h"
 #include "nvtx3/nvToolsExt.h"
 
 #include "nppi.h"
@@ -53,9 +52,9 @@
 #define PACKAGE "dsclipper"
 #define VERSION "1.0"
 #define LICENSE "Proprietary"
-#define DESCRIPTION "NVIDIA example plugin for integration with DeepStream on DGPU/Jetson"
-#define BINARY_PACKAGE "NVIDIA DeepStream 3rdparty IP integration example plugin"
-#define URL "http://nvidia.com/"
+#define DESCRIPTION "Gstreamer plugin for clipping objects with Deepstream nvinfer outputs"
+#define BINARY_PACKAGE "Gstreamer plugin"
+#define URL "https://github.com/zhouyuchong/gst-dsclipper"
 
 
 G_BEGIN_DECLS
@@ -78,9 +77,6 @@ typedef struct _GstDsClipperClass GstDsClipperClass;
 struct _GstDsClipper
 {
   GstBaseTransform base_trans;
-
-  /** Context of the custom algorithm library */
-  DsExampleCtx *dsclipperlib_ctx;
 
   /** Processing Queue and related synchronization structures. */
 

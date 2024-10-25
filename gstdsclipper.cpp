@@ -147,12 +147,6 @@ gst_dsclipper_submit_input_buffer (GstBaseTransform * btrans,
 static GstFlowReturn
 gst_dsclipper_generate_output (GstBaseTransform * btrans, GstBuffer ** outbuf);
 
-static void
-attach_metadata_full_frame (GstDsClipper * dsclipper,
-    NvDsFrameMeta * frame_meta, gdouble scale_ratio, DsClipperOutput * output,
-    guint batch_id);
-static void attach_metadata_object (GstDsClipper * dsclipper,
-    NvDsObjectMeta * obj_meta, DsClipperOutput * output);
 
 static gpointer gst_dsclipper_output_loop (gpointer data);
 
@@ -243,9 +237,9 @@ gst_dsclipper_class_init (GstDsClipperClass * klass)
   gst_element_class_set_details_simple (gstelement_class,
       "DsClipper plugin",
       "DsClipper Plugin",
-      "Process a 3rdparty example algorithm on objects / full frame",
-      "NVIDIA Corporation. Post on Deepstream for Tesla forum for any queries "
-      "@ https://devtalk.nvidia.com/default/board/209/");
+      "Clip objects based on Deepstream nvinfer outputs",
+      "DAMON ZHOU "
+      "@ https://github.com/zhouyuchong/gst-dsclipper");
 }
 
 static void
@@ -354,14 +348,6 @@ gst_dsclipper_start (GstBaseTransform * btrans)
   NvBufSurface * inter_buf;
 #endif
   NvBufSurfaceCreateParams create_params;
-  DsClipperInitParams init_params =
-      { dsclipper->processing_width, dsclipper->processing_height,
-    dsclipper->process_full_frame };
-
-  /* Algorithm specific initializations and resource allocation. */
-  dsclipper->dsclipperlib_ctx = DsClipperCtxInit (&init_params);
-
-  GST_DEBUG_OBJECT (dsclipper, "ctx lib %p \n", dsclipper->dsclipperlib_ctx);
 
   nvtx_str = "GstNvDsClipper: UID=" + std::to_string(dsclipper->unique_id);
   auto nvtx_deleter = [](nvtxDomainHandle_t d) { nvtxDomainDestroy (d); };
@@ -487,8 +473,6 @@ error:
     cudaStreamDestroy (dsclipper->cuda_stream);
     dsclipper->cuda_stream = NULL;
   }
-  if (dsclipper->dsclipperlib_ctx)
-    DsClipperCtxDeinit (dsclipper->dsclipperlib_ctx);
   return FALSE;
 }
 
@@ -560,10 +544,6 @@ gst_dsclipper_stop (GstBaseTransform * btrans)
 #ifdef WITH_OPENCV
   GST_DEBUG_OBJECT (dsclipper, "deleted CV Mat \n");
 #endif
-
-  // Deinit the algorithm library
-  DsClipperCtxDeinit (dsclipper->dsclipperlib_ctx);
-  dsclipper->dsclipperlib_ctx = NULL;
 
   GST_DEBUG_OBJECT (dsclipper, "ctx lib released \n");
 
@@ -941,125 +921,6 @@ gst_dsclipper_generate_output (GstBaseTransform * btrans, GstBuffer ** outbuf)
 }
 
 /**
- * Attach metadata for the full frame. We will be adding a new metadata.
- */
-static void
-attach_metadata_full_frame (GstDsClipper * dsclipper,
-    NvDsFrameMeta * frame_meta, gdouble scale_ratio, DsClipperOutput * output,
-    guint batch_id)
-{
-  NvDsBatchMeta *batch_meta = frame_meta->base_meta.batch_meta;
-  NvDsObjectMeta *object_meta = NULL;
-  static gchar font_name[] = "Serif";
-  GST_DEBUG_OBJECT (dsclipper, "Attaching metadata %d\n", output->numObjects);
-
-  for (gint i = 0; i < output->numObjects; i++) {
-    DsClipperObject *obj = &output->object[i];
-    object_meta = nvds_acquire_obj_meta_from_pool (batch_meta);
-    NvOSD_RectParams & rect_params = object_meta->rect_params;
-    NvOSD_TextParams & text_params = object_meta->text_params;
-
-    // Assign bounding box coordinates
-    rect_params.left = obj->left;
-    rect_params.top = obj->top;
-    rect_params.width = obj->width;
-    rect_params.height = obj->height;
-
-    // Semi-transparent yellow background
-    rect_params.has_bg_color = 0;
-    rect_params.bg_color = (NvOSD_ColorParams) {
-    1, 1, 0, 0.4};
-    // Red border of width 6
-    rect_params.border_width = 3;
-    rect_params.border_color = (NvOSD_ColorParams) {
-    1, 0, 0, 1};
-
-    // Scale the bounding boxes proportionally based on how the object/frame was
-    // scaled during input
-    rect_params.left /= scale_ratio;
-    rect_params.top /= scale_ratio;
-    rect_params.width /= scale_ratio;
-    rect_params.height /= scale_ratio;
-    GST_DEBUG_OBJECT (dsclipper, "Attaching rect%d of batch%u"
-        "  left->%f top->%f width->%f"
-        " height->%f label->%s\n", i, batch_id, rect_params.left,
-        rect_params.top, rect_params.width, rect_params.height, obj->label);
-
-    object_meta->object_id = UNTRACKED_OBJECT_ID;
-    g_strlcpy (object_meta->obj_label, obj->label, MAX_LABEL_SIZE);
-    // display_text required heap allocated memory
-    text_params.display_text = g_strdup (obj->label);
-    // Display text above the left top corner of the object
-    text_params.x_offset = rect_params.left;
-    text_params.y_offset = rect_params.top - 10;
-    // Set black background for the text
-    text_params.set_bg_clr = 1;
-    text_params.text_bg_clr = (NvOSD_ColorParams) {
-    0, 0, 0, 1};
-    // Font face, size and color
-    text_params.font_params.font_name = font_name;
-    text_params.font_params.font_size = 11;
-    text_params.font_params.font_color = (NvOSD_ColorParams) {
-    1, 1, 1, 1};
-
-    nvds_add_obj_meta_to_frame (frame_meta, object_meta, NULL);
-  }
-}
-
-/**
- * Only update string label in an existing object metadata. No bounding boxes.
- * We assume only one label per object is generated
- */
-static void
-attach_metadata_object (GstDsClipper * dsclipper, NvDsObjectMeta * obj_meta,
-    DsClipperOutput * output)
-{
-  if (output->numObjects == 0)
-    return;
-  NvDsBatchMeta *batch_meta = obj_meta->base_meta.batch_meta;
-
-  NvDsClassifierMeta *classifier_meta =
-      nvds_acquire_classifier_meta_from_pool (batch_meta);
-
-  classifier_meta->unique_component_id = dsclipper->unique_id;
-
-  NvDsLabelInfo *label_info =
-      nvds_acquire_label_info_meta_from_pool (batch_meta);
-  g_strlcpy (label_info->result_label, output->object[0].label, MAX_LABEL_SIZE);
-  nvds_add_label_info_meta_to_classifier (classifier_meta, label_info);
-  nvds_add_classifier_meta_to_object (obj_meta, classifier_meta);
-
-  nvds_acquire_meta_lock (batch_meta);
-  NvOSD_TextParams & text_params = obj_meta->text_params;
-  NvOSD_RectParams & rect_params = obj_meta->rect_params;
-
-  /* Below code to display the result */
-  // Set black background for the text
-  // display_text required heap allocated memory
-  if (text_params.display_text) {
-    gchar *conc_string = g_strconcat (text_params.display_text, " ",
-        output->object[0].label, NULL);
-    g_free (text_params.display_text);
-    text_params.display_text = conc_string;
-  } else {
-    // Display text above the left top corner of the object
-    text_params.x_offset = rect_params.left;
-    text_params.y_offset = rect_params.top - 10;
-    text_params.display_text = g_strdup (output->object[0].label);
-    // Font face, size and color
-    text_params.font_params.font_name = (char *) "Serif";
-    text_params.font_params.font_size = 11;
-    text_params.font_params.font_color = (NvOSD_ColorParams) {
-    1, 1, 1, 1};
-    // Set black background for the text
-    text_params.set_bg_clr = 1;
-    text_params.text_bg_clr = (NvOSD_ColorParams) {
-    0, 0, 0, 1};
-  }
-  nvds_release_meta_lock (batch_meta);
-}
-
-/**
  * Output loop used to pop output from processing thread, attach the output to the
  * buffer in form of NvDsMeta and push the buffer to downstream element.
  */
@@ -1067,7 +928,6 @@ static gpointer
 gst_dsclipper_output_loop (gpointer data)
 {
   GstDsClipper *dsclipper = GST_DSCLIPPER (data);
-  DsClipperOutput *output;
   NvDsObjectMeta *obj_meta = NULL;
   gdouble scale_ratio = 1.0;
 
