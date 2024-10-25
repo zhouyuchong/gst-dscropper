@@ -128,18 +128,8 @@ struct _GstDsClipper
   /** Input video info (resolution, color format, framerate, etc) */
   GstVideoInfo video_info;
 
-  /** Resolution at which frames/objects should be processed */
-  gint processing_width;
-  gint processing_height;
-
-  /** Maximum batch size. */
-  guint max_batch_size;
-
   /** GPU ID on which we expect to execute the task */
   guint gpu_id;
-
-  /** Boolean indicating if entire frame or cropped objects should be processed */
-  gboolean process_full_frame;
 
   /** Current batch number of the input batch. */
   gulong current_batch_num;
@@ -147,14 +137,16 @@ struct _GstDsClipper
   /** GstFlowReturn returned by the latest buffer pad push. */
   GstFlowReturn last_flow_ret;
 
-  /** Config params required by NvBufSurfTransform API. */
-  NvBufSurfTransformConfigParams transform_config_params;
-
-  /** Parameters to use for transforming buffers. */
-  NvBufSurfTransformParams transform_params;
-
   /** NVTX Domain. */
   nvtxDomainHandle_t nvtx_domain;
+
+  gchar *output_path;
+  gchar *name_format;
+  gint operate_on_gie_id;
+  std::vector<gboolean> *operate_on_class_ids;
+  guint processing_height;
+  guint processing_width;
+  guint max_batch_size;
 };
 
 typedef struct
