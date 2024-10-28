@@ -20,8 +20,8 @@
  * DEALINGS IN THE SOFTWARE.
  */
 
-#ifndef __GST_DSCLIPPER_H__
-#define __GST_DSCLIPPER_H__
+#ifndef __GST_DSCROPPER_H__
+#define __GST_DSCROPPER_H__
 
 #include <gst/base/gstbasetransform.h>
 #include <gst/video/video.h>
@@ -51,30 +51,30 @@
 #include <list>
 
 /* Package and library details required for plugin_init */
-#define PACKAGE "dsclipper"
+#define PACKAGE "dscropper"
 #define VERSION "1.0"
 #define LICENSE "Proprietary"
 #define DESCRIPTION "Gstreamer plugin for clipping objects with Deepstream nvinfer outputs"
 #define BINARY_PACKAGE "Gstreamer plugin"
-#define URL "https://github.com/zhouyuchong/gst-dsclipper"
+#define URL "https://github.com/zhouyuchong/gst-dscropper"
 
 
 G_BEGIN_DECLS
 /* Standard boilerplate stuff */
-typedef struct _GstDsClipper GstDsClipper;
-typedef struct _GstDsClipperClass GstDsClipperClass;
+typedef struct _GstDsCropper GstDsCropper;
+typedef struct _GstDsCropperClass GstDsCropperClass;
 
 /* Standard boilerplate stuff */
-#define GST_TYPE_DSCLIPPER (gst_dsclipper_get_type())
-#define GST_DSCLIPPER(obj) (G_TYPE_CHECK_INSTANCE_CAST((obj),GST_TYPE_DSCLIPPER,GstDsClipper))
-#define GST_DSCLIPPER_CLASS(klass) (G_TYPE_CHECK_CLASS_CAST((klass),GST_TYPE_DSCLIPPER,GstDsClipperClass))
-#define GST_DSCLIPPER_GET_CLASS(obj) (G_TYPE_INSTANCE_GET_CLASS((obj), GST_TYPE_DSCLIPPER, GstDsClipperClass))
-#define GST_IS_DSCLIPPER(obj) (G_TYPE_CHECK_INSTANCE_TYPE((obj),GST_TYPE_DSCLIPPER))
-#define GST_IS_DSCLIPPER_CLASS(klass) (G_TYPE_CHECK_CLASS_TYPE((klass),GST_TYPE_DSCLIPPER))
-#define GST_DSCLIPPER_CAST(obj)  ((GstDsClipper *)(obj))
+#define GST_TYPE_DSCROPPER (gst_dscropper_get_type())
+#define GST_DSCROPPER(obj) (G_TYPE_CHECK_INSTANCE_CAST((obj),GST_TYPE_DSCROPPER,GstDsCropper))
+#define GST_DSCROPPER_CLASS(klass) (G_TYPE_CHECK_CLASS_CAST((klass),GST_TYPE_DSCROPPER,GstDsCropperClass))
+#define GST_DSCROPPER_GET_CLASS(obj) (G_TYPE_INSTANCE_GET_CLASS((obj), GST_TYPE_DSCROPPER, GstDsCropperClass))
+#define GST_IS_DSCROPPER(obj) (G_TYPE_CHECK_INSTANCE_TYPE((obj),GST_TYPE_DSCROPPER))
+#define GST_IS_DSCROPPER_CLASS(klass) (G_TYPE_CHECK_CLASS_TYPE((klass),GST_TYPE_DSCROPPER))
+#define GST_DSCROPPER_CAST(obj)  ((GstDsCropper *)(obj))
 
-/** Maximum batch size to be supported by dsclipper. */
-#define NVDSCLIPPER_MAX_BATCH_SIZE G_MAXUINT
+/** Maximum batch size to be supported by dscropper. */
+#define NVDSCROPPER_MAX_BATCH_SIZE G_MAXUINT
 
 typedef struct
 {
@@ -83,10 +83,10 @@ typedef struct
   guint left;
   guint top;
   guint counter;
-} ClipperObjectInfo;
+} CropperObjectInfo;
 
 
-struct _GstDsClipper
+struct _GstDsCropper
 {
   GstBaseTransform base_trans;
 
@@ -102,7 +102,7 @@ struct _GstDsClipper
 
   GQueue *data_queue;
 
-  std::unordered_map<guint64, ClipperObjectInfo> *object_infos;
+  std::unordered_map<guint64, CropperObjectInfo> *object_infos;
   std::list<guint64> *insertion_order;
   
   /** Gcondition for process queue**/
@@ -182,7 +182,7 @@ typedef struct
   gulong frame_num = 0;
   /** The buffer structure the object / frame was converted from. */
   NvBufSurfaceParams *input_surf_params = nullptr;
-} GstDsClipperFrame;
+} GstDsCropperFrame;
 
 /**
  * Holds information about the batch of frames to be inferred.
@@ -190,7 +190,7 @@ typedef struct
 typedef struct
 {
   /** Vector of frames in the batch. */
-  std::vector < GstDsClipperFrame > frames;
+  std::vector < GstDsCropperFrame > frames;
   /** Pointer to the input GstBuffer. */
   GstBuffer *inbuf = nullptr;
   /** Batch number of the input batch. */
@@ -213,7 +213,7 @@ typedef struct
 #endif
 
   nvtxRangeId_t nvtx_complete_buf_range = 0;
-} GstDsClipperBatch;
+} GstDsCropperBatch;
 
 typedef struct
 {
@@ -226,12 +226,12 @@ typedef struct
 } ClippedSurfaceInfo;
 
 /** Boiler plate stuff */
-struct _GstDsClipperClass
+struct _GstDsCropperClass
 {
   GstBaseTransformClass parent_class;
 };
 
-GType gst_dsclipper_get_type (void);
+GType gst_dscropper_get_type (void);
 
 G_END_DECLS
-#endif /* __GST_DSCLIPPER_H__ */
+#endif /* __GST_DSCROPPER_H__ */

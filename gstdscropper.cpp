@@ -28,7 +28,7 @@
 #include <ostream>
 #include <fstream>
 
-#include "gstdsclipper.h"
+#include "gstdscropper.h"
 
 #include <sys/time.h>
 #include <condition_variable>
@@ -38,8 +38,8 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 
-GST_DEBUG_CATEGORY_STATIC (gst_dsclipper_debug);
-#define GST_CAT_DEFAULT gst_dsclipper_debug
+GST_DEBUG_CATEGORY_STATIC (gst_dscropper_debug);
+#define GST_CAT_DEFAULT gst_dscropper_debug
 #define USE_EGLIMAGE 1
 
 
@@ -114,7 +114,7 @@ enum
 /* By default NVIDIA Hardware allocated memory flows through the pipeline. We
  * will be processing on this type of memory only. */
 #define GST_CAPS_FEATURE_MEMORY_NVMM "memory:NVMM"
-static GstStaticPadTemplate gst_dsclipper_sink_template =
+static GstStaticPadTemplate gst_dscropper_sink_template =
 GST_STATIC_PAD_TEMPLATE ("sink",
     GST_PAD_SINK,
     GST_PAD_ALWAYS,
@@ -122,7 +122,7 @@ GST_STATIC_PAD_TEMPLATE ("sink",
         (GST_CAPS_FEATURE_MEMORY_NVMM,
             "{ NV12, RGBA, I420 }")));
 
-static GstStaticPadTemplate gst_dsclipper_src_template =
+static GstStaticPadTemplate gst_dscropper_src_template =
 GST_STATIC_PAD_TEMPLATE ("src",
     GST_PAD_SRC,
     GST_PAD_ALWAYS,
@@ -131,36 +131,36 @@ GST_STATIC_PAD_TEMPLATE ("src",
             "{ NV12, RGBA, I420 }")));
 
 /* Define our element type. Standard GObject/GStreamer boilerplate stuff */
-#define gst_dsclipper_parent_class parent_class
-G_DEFINE_TYPE (GstDsClipper, gst_dsclipper, GST_TYPE_BASE_TRANSFORM);
+#define gst_dscropper_parent_class parent_class
+G_DEFINE_TYPE (GstDsCropper, gst_dscropper, GST_TYPE_BASE_TRANSFORM);
 
-static void gst_dsclipper_set_property (GObject * object, guint prop_id,
+static void gst_dscropper_set_property (GObject * object, guint prop_id,
     const GValue * value, GParamSpec * pspec);
-static void gst_dsclipper_get_property (GObject * object, guint prop_id,
+static void gst_dscropper_get_property (GObject * object, guint prop_id,
     GValue * value, GParamSpec * pspec);
 
-static gboolean gst_dsclipper_set_caps (GstBaseTransform * btrans,
+static gboolean gst_dscropper_set_caps (GstBaseTransform * btrans,
     GstCaps * incaps, GstCaps * outcaps);
-static gboolean gst_dsclipper_start (GstBaseTransform * btrans);
-static gboolean gst_dsclipper_stop (GstBaseTransform * btrans);
+static gboolean gst_dscropper_start (GstBaseTransform * btrans);
+static gboolean gst_dscropper_stop (GstBaseTransform * btrans);
 
 static GstFlowReturn
-gst_dsclipper_submit_input_buffer (GstBaseTransform * btrans,
+gst_dscropper_submit_input_buffer (GstBaseTransform * btrans,
     gboolean discont, GstBuffer * inbuf);
 static GstFlowReturn
-gst_dsclipper_generate_output (GstBaseTransform * btrans, GstBuffer ** outbuf);
+gst_dscropper_generate_output (GstBaseTransform * btrans, GstBuffer ** outbuf);
 
 
-static gpointer gst_dsclipper_output_loop (gpointer data);
+static gpointer gst_dscropper_output_loop (gpointer data);
 
-static gpointer gst_dsclipper_data_loop (gpointer data);
+static gpointer gst_dscropper_data_loop (gpointer data);
 
 /* Install properties, set sink and src pad capabilities, override the required
  * functions of the base class, These are common to all instances of the
  * element.
  */
 static void
-gst_dsclipper_class_init (GstDsClipperClass * klass)
+gst_dscropper_class_init (GstDsCropperClass * klass)
 {
   GObjectClass *gobject_class;
   GstElementClass *gstelement_class;
@@ -174,17 +174,17 @@ gst_dsclipper_class_init (GstDsClipperClass * klass)
   gstbasetransform_class = (GstBaseTransformClass *) klass;
 
   /* Overide base class functions */
-  gobject_class->set_property = GST_DEBUG_FUNCPTR (gst_dsclipper_set_property);
-  gobject_class->get_property = GST_DEBUG_FUNCPTR (gst_dsclipper_get_property);
+  gobject_class->set_property = GST_DEBUG_FUNCPTR (gst_dscropper_set_property);
+  gobject_class->get_property = GST_DEBUG_FUNCPTR (gst_dscropper_get_property);
 
-  gstbasetransform_class->set_caps = GST_DEBUG_FUNCPTR (gst_dsclipper_set_caps);
-  gstbasetransform_class->start = GST_DEBUG_FUNCPTR (gst_dsclipper_start);
-  gstbasetransform_class->stop = GST_DEBUG_FUNCPTR (gst_dsclipper_stop);
+  gstbasetransform_class->set_caps = GST_DEBUG_FUNCPTR (gst_dscropper_set_caps);
+  gstbasetransform_class->start = GST_DEBUG_FUNCPTR (gst_dscropper_start);
+  gstbasetransform_class->stop = GST_DEBUG_FUNCPTR (gst_dscropper_stop);
 
   gstbasetransform_class->submit_input_buffer =
-      GST_DEBUG_FUNCPTR (gst_dsclipper_submit_input_buffer);
+      GST_DEBUG_FUNCPTR (gst_dscropper_submit_input_buffer);
   gstbasetransform_class->generate_output =
-      GST_DEBUG_FUNCPTR (gst_dsclipper_generate_output);
+      GST_DEBUG_FUNCPTR (gst_dscropper_generate_output);
 
   /* Install properties */
   g_object_class_install_property (gobject_class, PROP_UNIQUE_ID,
@@ -205,7 +205,7 @@ gst_dsclipper_class_init (GstDsClipperClass * klass)
 
   g_object_class_install_property (gobject_class, PROP_OUTPUT_PATH,
       g_param_spec_string ("output-path", "Output Path",
-          "Path to save images for this instance of dsclipper",
+          "Path to save images for this instance of dscropper",
           DEFAULT_OUTPUT_PATH,
           (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
               GST_PARAM_MUTABLE_PLAYING)));
@@ -244,23 +244,23 @@ gst_dsclipper_class_init (GstDsClipperClass * klass)
               GST_PARAM_MUTABLE_READY)));
   /* Set sink and src pad capabilities */
   gst_element_class_add_pad_template (gstelement_class,
-      gst_static_pad_template_get (&gst_dsclipper_src_template));
+      gst_static_pad_template_get (&gst_dscropper_src_template));
   gst_element_class_add_pad_template (gstelement_class,
-      gst_static_pad_template_get (&gst_dsclipper_sink_template));
+      gst_static_pad_template_get (&gst_dscropper_sink_template));
 
   /* Set metadata describing the element */
   gst_element_class_set_details_simple (gstelement_class,
-      "DsClipper plugin",
-      "DsClipper Plugin",
+      "DsCropper plugin",
+      "DsCropper Plugin",
       "Clip objects based on Deepstream nvinfer outputs",
       "DAMON ZHOU "
-      "@ https://github.com/zhouyuchong/gst-dsclipper");
+      "@ https://github.com/zhouyuchong/gst-dscropper");
 }
 
 static void
-gst_dsclipper_init (GstDsClipper * dsclipper)
+gst_dscropper_init (GstDsCropper * dscropper)
 {
-  GstBaseTransform *btrans = GST_BASE_TRANSFORM (dsclipper);
+  GstBaseTransform *btrans = GST_BASE_TRANSFORM (dscropper);
 
   /* We will not be generating a new buffer. Just adding / updating
    * metadata. */
@@ -270,13 +270,13 @@ gst_dsclipper_init (GstDsClipper * dsclipper)
   gst_base_transform_set_passthrough (GST_BASE_TRANSFORM (btrans), TRUE);
 
   /* Initialize all property variables to default values */
-  dsclipper->unique_id = DEFAULT_UNIQUE_ID;
-  dsclipper->gpu_id = DEFAULT_GPU_ID;
-  dsclipper->operate_on_gie_id = DEFAULT_OPERATE_ON_GIE_ID;
-  dsclipper->operate_on_class_ids = new std::vector < gboolean >;
-  dsclipper->output_path = g_strdup (DEFAULT_OUTPUT_PATH);
-  dsclipper->name_format = g_strdup (DEFAULT_NAME_FORMAT);
-  dsclipper->interval = DEFAULT_INTERVAL;
+  dscropper->unique_id = DEFAULT_UNIQUE_ID;
+  dscropper->gpu_id = DEFAULT_GPU_ID;
+  dscropper->operate_on_gie_id = DEFAULT_OPERATE_ON_GIE_ID;
+  dscropper->operate_on_class_ids = new std::vector < gboolean >;
+  dscropper->output_path = g_strdup (DEFAULT_OUTPUT_PATH);
+  dscropper->name_format = g_strdup (DEFAULT_NAME_FORMAT);
+  dscropper->interval = DEFAULT_INTERVAL;
   /* This quark is required to identify NvDsMeta when iterating through
    * the buffer metadatas */
   if (!_dsmeta_quark)
@@ -286,30 +286,30 @@ gst_dsclipper_init (GstDsClipper * dsclipper)
 /* Function called when a property of the element is set. Standard boilerplate.
  */
 static void
-gst_dsclipper_set_property (GObject * object, guint prop_id,
+gst_dscropper_set_property (GObject * object, guint prop_id,
     const GValue * value, GParamSpec * pspec)
 {
-  GstDsClipper *dsclipper = GST_DSCLIPPER (object);
+  GstDsCropper *dscropper = GST_DSCROPPER (object);
   switch (prop_id) {
     case PROP_UNIQUE_ID:
-      dsclipper->unique_id = g_value_get_uint (value);
+      dscropper->unique_id = g_value_get_uint (value);
       break;
     case PROP_GPU_DEVICE_ID:
-      dsclipper->gpu_id = g_value_get_uint (value);
+      dscropper->gpu_id = g_value_get_uint (value);
       break;
     case PROP_NAME_FORMAT:
-      dsclipper->name_format = g_value_dup_string (value);
+      dscropper->name_format = g_value_dup_string (value);
       break;
     case PROP_OUTPUT_PATH:
-      dsclipper->output_path = g_value_dup_string (value);
+      dscropper->output_path = g_value_dup_string (value);
       break;
 
     case PROP_OPERATE_ON_GIE_ID:
-      dsclipper->operate_on_gie_id = g_value_get_int (value);
+      dscropper->operate_on_gie_id = g_value_get_int (value);
       break;
       
     case PROP_INTERVAL:
-      dsclipper->interval = g_value_get_int (value);
+      dscropper->interval = g_value_get_int (value);
       break;
       
     case PROP_OPERATE_ON_CLASS_IDS:
@@ -325,9 +325,9 @@ gst_dsclipper_set_property (GObject * object, guint prop_id,
         max_class_id = MAX (max_class_id, class_id);
         str.get ();
       }
-      dsclipper->operate_on_class_ids->assign (max_class_id + 1, FALSE);
+      dscropper->operate_on_class_ids->assign (max_class_id + 1, FALSE);
     for (auto & cid:class_ids)
-        dsclipper->operate_on_class_ids->at (cid) = TRUE;
+        dscropper->operate_on_class_ids->at (cid) = TRUE;
     }
       break;
 
@@ -341,26 +341,26 @@ gst_dsclipper_set_property (GObject * object, guint prop_id,
  * boilerplate.
  */
 static void
-gst_dsclipper_get_property (GObject * object, guint prop_id,
+gst_dscropper_get_property (GObject * object, guint prop_id,
     GValue * value, GParamSpec * pspec)
 {
-  GstDsClipper *dsclipper = GST_DSCLIPPER (object);
+  GstDsCropper *dscropper = GST_DSCROPPER (object);
 
   switch (prop_id) {
     case PROP_UNIQUE_ID:
-      g_value_set_uint (value, dsclipper->unique_id);
+      g_value_set_uint (value, dscropper->unique_id);
       break;
     case PROP_GPU_DEVICE_ID:
-      g_value_set_uint (value, dsclipper->gpu_id);
+      g_value_set_uint (value, dscropper->gpu_id);
       break;
     case PROP_OPERATE_ON_GIE_ID:
-      g_value_set_int (value, dsclipper->operate_on_gie_id);
+      g_value_set_int (value, dscropper->operate_on_gie_id);
       break;
     case PROP_OPERATE_ON_CLASS_IDS:
     {
       std::stringstream str;
-      for (size_t i = 0; i < dsclipper->operate_on_class_ids->size (); i++) {
-        if (dsclipper->operate_on_class_ids->at (i))
+      for (size_t i = 0; i < dscropper->operate_on_class_ids->size (); i++) {
+        if (dscropper->operate_on_class_ids->at (i))
           str << i << ":";
       }
       g_value_set_string (value, str.str ().c_str ());
@@ -368,11 +368,11 @@ gst_dsclipper_get_property (GObject * object, guint prop_id,
       break;
 
     case PROP_INTERVAL:
-      g_value_set_int (value, dsclipper->interval);
+      g_value_set_int (value, dscropper->interval);
       break;
 
     case PROP_OUTPUT_PATH:
-      dsclipper->output_path = g_value_dup_string (value);
+      dscropper->output_path = g_value_dup_string (value);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -384,9 +384,9 @@ gst_dsclipper_get_property (GObject * object, guint prop_id,
  * Initialize all resources and start the process thread
  */
 static gboolean
-gst_dsclipper_start (GstBaseTransform * btrans)
+gst_dscropper_start (GstBaseTransform * btrans)
 {
-  GstDsClipper *dsclipper = GST_DSCLIPPER (btrans);
+  GstDsCropper *dscropper = GST_DSCROPPER (btrans);
   std::string nvtx_str;
 #ifdef WITH_OPENCV
   // OpenCV mat containing RGB data
@@ -395,42 +395,42 @@ gst_dsclipper_start (GstBaseTransform * btrans)
   NvBufSurface * inter_buf;
 #endif
 
-  nvtx_str = "GstNvDsClipper: UID=" + std::to_string(dsclipper->unique_id);
+  nvtx_str = "GstNvDsCropper: UID=" + std::to_string(dscropper->unique_id);
   auto nvtx_deleter = [](nvtxDomainHandle_t d) { nvtxDomainDestroy (d); };
   std::unique_ptr<nvtxDomainRegistration, decltype(nvtx_deleter)> nvtx_domain_ptr (
       nvtxDomainCreate(nvtx_str.c_str()), nvtx_deleter);
 
-  CHECK_CUDA_STATUS (cudaSetDevice (dsclipper->gpu_id),
+  CHECK_CUDA_STATUS (cudaSetDevice (dscropper->gpu_id),
       "Unable to set cuda device");
 
-  CHECK_CUDA_STATUS (cudaStreamCreate (&dsclipper->cuda_stream),
+  CHECK_CUDA_STATUS (cudaStreamCreate (&dscropper->cuda_stream),
       "Could not create cuda stream");
 
   /* Create process queue and cvmat queue to transfer data between threads.
    * We will be using this queue to maintain the list of frames/objects
    * currently given to the algorithm for processing. */
-  dsclipper->process_queue = g_queue_new ();
-  dsclipper->buf_queue = g_queue_new ();
-  dsclipper->data_queue = g_queue_new ();
-  dsclipper->object_infos = new std::unordered_map<guint64, ClipperObjectInfo>();
-  dsclipper->insertion_order = new std::list<guint64>();
+  dscropper->process_queue = g_queue_new ();
+  dscropper->buf_queue = g_queue_new ();
+  dscropper->data_queue = g_queue_new ();
+  dscropper->object_infos = new std::unordered_map<guint64, CropperObjectInfo>();
+  dscropper->insertion_order = new std::list<guint64>();
 
   /* Start a thread which will pop output from the algorithm, form NvDsMeta and
    * push buffers to the next element. */
-  dsclipper->process_thread =
-      g_thread_new ("dsclipper-process-thread", gst_dsclipper_output_loop,
-      dsclipper);
-  dsclipper->data_thread =
-      g_thread_new ("dsclipper-data-thread", gst_dsclipper_data_loop,
-      dsclipper);
-  dsclipper->nvtx_domain = nvtx_domain_ptr.release ();
+  dscropper->process_thread =
+      g_thread_new ("dscropper-process-thread", gst_dscropper_output_loop,
+      dscropper);
+  dscropper->data_thread =
+      g_thread_new ("dscropper-data-thread", gst_dscropper_data_loop,
+      dscropper);
+  dscropper->nvtx_domain = nvtx_domain_ptr.release ();
 
   return TRUE;
 error:
 
-  if (dsclipper->cuda_stream) {
-    cudaStreamDestroy (dsclipper->cuda_stream);
-    dsclipper->cuda_stream = NULL;
+  if (dscropper->cuda_stream) {
+    cudaStreamDestroy (dscropper->cuda_stream);
+    dscropper->cuda_stream = NULL;
   }
   return FALSE;
 }
@@ -439,9 +439,9 @@ error:
  * Stop the process thread and free up all the resources
  */
 static gboolean
-gst_dsclipper_stop (GstBaseTransform * btrans)
+gst_dscropper_stop (GstBaseTransform * btrans)
 {
-  GstDsClipper *dsclipper = GST_DSCLIPPER (btrans);
+  GstDsCropper *dscropper = GST_DSCROPPER (btrans);
 
 #ifdef WITH_OPENCV
   cv::Mat * cvmat;
@@ -449,61 +449,61 @@ gst_dsclipper_stop (GstBaseTransform * btrans)
   NvBufSurface * inter_buf;
 #endif
 
-  g_mutex_lock (&dsclipper->process_lock);
+  g_mutex_lock (&dscropper->process_lock);
 
   /* Wait till all the items in the queue are handled. */
-  while (!g_queue_is_empty (dsclipper->process_queue)) {
-    g_cond_wait (&dsclipper->process_cond, &dsclipper->process_lock);
+  while (!g_queue_is_empty (dscropper->process_queue)) {
+    g_cond_wait (&dscropper->process_cond, &dscropper->process_lock);
   }
 
-  g_mutex_lock (&dsclipper->data_lock);
-  while (!g_queue_is_empty (dsclipper->data_queue)) {
-    g_cond_wait (&dsclipper->data_cond, &dsclipper->data_lock);
+  g_mutex_lock (&dscropper->data_lock);
+  while (!g_queue_is_empty (dscropper->data_queue)) {
+    g_cond_wait (&dscropper->data_cond, &dscropper->data_lock);
   }
 
 #ifdef WITH_OPENCV
-  while (!g_queue_is_empty (dsclipper->buf_queue)) {
-    cvmat = (cv::Mat *) g_queue_pop_head (dsclipper->buf_queue);
+  while (!g_queue_is_empty (dscropper->buf_queue)) {
+    cvmat = (cv::Mat *) g_queue_pop_head (dscropper->buf_queue);
     delete[]cvmat;
     cvmat = NULL;
   }
 #else
-  while (!g_queue_is_empty (dsclipper->buf_queue)) {
-    inter_buf = (NvBufSurface *) g_queue_pop_head (dsclipper->buf_queue);
+  while (!g_queue_is_empty (dscropper->buf_queue)) {
+    inter_buf = (NvBufSurface *) g_queue_pop_head (dscropper->buf_queue);
     if (inter_buf)
       NvBufSurfaceDestroy (inter_buf);
     inter_buf = NULL;
   }
 #endif
-  dsclipper->stop = TRUE;
+  dscropper->stop = TRUE;
 
-  g_cond_broadcast (&dsclipper->process_cond);
-  g_mutex_unlock (&dsclipper->process_lock);
+  g_cond_broadcast (&dscropper->process_cond);
+  g_mutex_unlock (&dscropper->process_lock);
 
-  g_cond_broadcast (&dsclipper->data_cond);
-  g_mutex_unlock (&dsclipper->data_lock);
+  g_cond_broadcast (&dscropper->data_cond);
+  g_mutex_unlock (&dscropper->data_lock);
 
-  g_thread_join (dsclipper->process_thread);
-  g_thread_join (dsclipper->data_thread);
+  g_thread_join (dscropper->process_thread);
+  g_thread_join (dscropper->data_thread);
 
 #ifdef WITH_OPENCV
-  if (dsclipper->inter_buf)
-    NvBufSurfaceDestroy (dsclipper->inter_buf);
-  dsclipper->inter_buf = NULL;
+  if (dscropper->inter_buf)
+    NvBufSurfaceDestroy (dscropper->inter_buf);
+  dscropper->inter_buf = NULL;
 #endif
 
-  if (dsclipper->cuda_stream)
-    cudaStreamDestroy (dsclipper->cuda_stream);
-  dsclipper->cuda_stream = NULL;
+  if (dscropper->cuda_stream)
+    cudaStreamDestroy (dscropper->cuda_stream);
+  dscropper->cuda_stream = NULL;
 
-  if (dsclipper->object_infos) delete dsclipper->object_infos;
-  dsclipper->object_infos = nullptr;
-  delete dsclipper->insertion_order;
-  dsclipper->insertion_order = nullptr;
+  if (dscropper->object_infos) delete dscropper->object_infos;
+  dscropper->object_infos = nullptr;
+  delete dscropper->insertion_order;
+  dscropper->insertion_order = nullptr;
 
-  g_queue_free (dsclipper->process_queue);
-  g_queue_free (dsclipper->data_queue);
-  g_queue_free (dsclipper->buf_queue);
+  g_queue_free (dscropper->process_queue);
+  g_queue_free (dscropper->data_queue);
+  g_queue_free (dscropper->buf_queue);
   
   return TRUE;
 }
@@ -512,14 +512,14 @@ gst_dsclipper_stop (GstBaseTransform * btrans)
  * Called when source / sink pad capabilities have been negotiated.
  */
 static gboolean
-gst_dsclipper_set_caps (GstBaseTransform * btrans, GstCaps * incaps,
+gst_dscropper_set_caps (GstBaseTransform * btrans, GstCaps * incaps,
     GstCaps * outcaps)
 {
-  GstDsClipper *dsclipper = GST_DSCLIPPER (btrans);
+  GstDsCropper *dscropper = GST_DSCROPPER (btrans);
   /* Save the input video information, since this will be required later. */
-  gst_video_info_from_caps (&dsclipper->video_info, incaps);
+  gst_video_info_from_caps (&dscropper->video_info, incaps);
 
-  CHECK_CUDA_STATUS (cudaSetDevice (dsclipper->gpu_id),
+  CHECK_CUDA_STATUS (cudaSetDevice (dscropper->gpu_id),
       "Unable to set cuda device");
 
   return TRUE;
@@ -529,25 +529,25 @@ error:
 }
 
 static inline gboolean
-should_crop_object (GstDsClipper *dsclipper, NvDsObjectMeta * obj_meta, guint counter)
+should_crop_object (GstDsCropper *dscropper, NvDsObjectMeta * obj_meta, guint counter)
 {
-  if (dsclipper->operate_on_gie_id > -1 &&
-      obj_meta->unique_component_id != dsclipper->operate_on_gie_id)
+  if (dscropper->operate_on_gie_id > -1 &&
+      obj_meta->unique_component_id != dscropper->operate_on_gie_id)
     return FALSE;
 
-  if (!dsclipper->operate_on_class_ids->empty () &&
-      ((int) dsclipper->operate_on_class_ids->size () <= obj_meta->class_id ||
-          dsclipper->operate_on_class_ids->at (obj_meta->class_id) == FALSE)) {
+  if (!dscropper->operate_on_class_ids->empty () &&
+      ((int) dscropper->operate_on_class_ids->size () <= obj_meta->class_id ||
+          dscropper->operate_on_class_ids->at (obj_meta->class_id) == FALSE)) {
     return FALSE;
   }
   if (obj_meta->object_id  == UNTRACKED_OBJECT_ID) {
-    GST_WARNING_OBJECT (dsclipper, "Untracked objects in metadata. Cannot"
+    GST_WARNING_OBJECT (dscropper, "Untracked objects in metadata. Cannot"
       " use interval mode on untracked objects.");
     return FALSE;
   }
-  if (dsclipper->interval == -1 && counter) return FALSE;
-  if (dsclipper->interval > 0) {
-    if (counter % (dsclipper->interval + 1) != 0) return FALSE;
+  if (dscropper->interval == -1 && counter) return FALSE;
+  if (dscropper->interval > 0) {
+    if (counter % (dscropper->interval + 1) != 0) return FALSE;
   }
   return TRUE;
 }
@@ -556,23 +556,23 @@ should_crop_object (GstDsClipper *dsclipper, NvDsObjectMeta * obj_meta, guint co
  * Called when element recieves an input buffer from upstream element.
  */
 static GstFlowReturn
-gst_dsclipper_submit_input_buffer (GstBaseTransform * btrans,
+gst_dscropper_submit_input_buffer (GstBaseTransform * btrans,
     gboolean discont, GstBuffer * inbuf)
 {
-  GstDsClipper *dsclipper = GST_DSCLIPPER (btrans);
+  GstDsCropper *dscropper = GST_DSCROPPER (btrans);
   GstMapInfo in_map_info;
   NvBufSurface *in_surf;
-  GstDsClipperBatch *buf_push_batch;
+  GstDsCropperBatch *buf_push_batch;
   GstFlowReturn flow_ret;
   std::string nvtx_str;
-  std::unique_ptr < GstDsClipperBatch > batch = nullptr;
+  std::unique_ptr < GstDsCropperBatch > batch = nullptr;
 
   NvDsBatchMeta *batch_meta = NULL;
   guint i = 0;
   gdouble scale_ratio = 1.0;
   guint num_filled = 0;
 
-  dsclipper->current_batch_num++;
+  dscropper->current_batch_num++;
 
   nvtxEventAttributes_t eventAttrib = {0};
   eventAttrib.version = NVTX_VERSION;
@@ -580,25 +580,25 @@ gst_dsclipper_submit_input_buffer (GstBaseTransform * btrans,
   eventAttrib.colorType = NVTX_COLOR_ARGB;
   eventAttrib.color = 0xFFFF0000;
   eventAttrib.messageType = NVTX_MESSAGE_TYPE_ASCII;
-  nvtx_str = "buffer_process batch_num=" + std::to_string(dsclipper->current_batch_num);
+  nvtx_str = "buffer_process batch_num=" + std::to_string(dscropper->current_batch_num);
   eventAttrib.message.ascii = nvtx_str.c_str();
-  nvtxRangeId_t buf_process_range = nvtxDomainRangeStartEx(dsclipper->nvtx_domain, &eventAttrib);
+  nvtxRangeId_t buf_process_range = nvtxDomainRangeStartEx(dscropper->nvtx_domain, &eventAttrib);
 
   memset (&in_map_info, 0, sizeof (in_map_info));
 
   /* Map the buffer contents and get the pointer to NvBufSurface. */
   if (!gst_buffer_map (inbuf, &in_map_info, GST_MAP_READ)) {
-    GST_ELEMENT_ERROR (dsclipper, STREAM, FAILED,
+    GST_ELEMENT_ERROR (dscropper, STREAM, FAILED,
         ("%s:gst buffer map to get pointer to NvBufSurface failed", __func__), (NULL));
     return GST_FLOW_ERROR;
   }
   in_surf = (NvBufSurface *) in_map_info.data;
 
-  nvds_set_input_system_timestamp (inbuf, GST_ELEMENT_NAME (dsclipper));
+  nvds_set_input_system_timestamp (inbuf, GST_ELEMENT_NAME (dscropper));
 
   batch_meta = gst_buffer_get_nvds_batch_meta (inbuf);
   if (batch_meta == nullptr) {
-    GST_ELEMENT_ERROR (dsclipper, STREAM, FAILED,
+    GST_ELEMENT_ERROR (dscropper, STREAM, FAILED,
         ("NvDsBatchMeta not found for input buffer."), (NULL));
     return GST_FLOW_ERROR;
   }
@@ -628,39 +628,39 @@ gst_dsclipper_submit_input_buffer (GstBaseTransform * btrans,
       obj_meta = (NvDsObjectMeta *) (l_obj->data);
 
       if (obj_meta->object_id == UNTRACKED_OBJECT_ID) {
-        GST_WARNING_OBJECT(dsclipper, "Untracked objects in metadata. Cannot apply clipping on untracked objects.");
+        GST_WARNING_OBJECT(dscropper, "Untracked objects in metadata. Cannot apply clipping on untracked objects.");
         printf("untracked\n");
         continue;
       }
 
-      auto it = dsclipper->object_infos->find(obj_meta->object_id);
-      if (it != dsclipper->object_infos->end()) {
+      auto it = dscropper->object_infos->find(obj_meta->object_id);
+      if (it != dscropper->object_infos->end()) {
           it->second.counter += 1;
           it->second.width = obj_meta->rect_params.width;
           it->second.height = obj_meta->rect_params.height;
           it->second.left = obj_meta->rect_params.left;
           it->second.top = obj_meta->rect_params.top;
       } else {
-        if (dsclipper->object_infos->size() == MAX_OBJ_INFO_SIZE) {
-          dsclipper->object_infos->erase(dsclipper->insertion_order->front());
-          dsclipper->insertion_order->pop_front();
+        if (dscropper->object_infos->size() == MAX_OBJ_INFO_SIZE) {
+          dscropper->object_infos->erase(dscropper->insertion_order->front());
+          dscropper->insertion_order->pop_front();
         }
-          ClipperObjectInfo object_info;
+          CropperObjectInfo object_info;
           object_info.counter = 0;
           object_info.width = obj_meta->rect_params.width;
           object_info.height = obj_meta->rect_params.height;
           object_info.left = obj_meta->rect_params.left;
           object_info.top = obj_meta->rect_params.top;
-          dsclipper->object_infos->insert(std::make_pair(obj_meta->object_id, object_info));
-          dsclipper->insertion_order->push_back(obj_meta->object_id);
+          dscropper->object_infos->insert(std::make_pair(obj_meta->object_id, object_info));
+          dscropper->insertion_order->push_back(obj_meta->object_id);
       }
-      it = dsclipper->object_infos->find(obj_meta->object_id);
-      need_clip = should_crop_object (dsclipper, obj_meta, it->second.counter);
+      it = dscropper->object_infos->find(obj_meta->object_id);
+      need_clip = should_crop_object (dscropper, obj_meta, it->second.counter);
       // printf("track id: %d, counter: %d, need clip: %d\n", obj_meta->object_id, it->second.counter, need_clip);
 
       if (!need_clip) continue;
 
-      if (g_queue_get_length(dsclipper->data_queue) >= MAX_QUEUE_SIZE) continue;
+      if (g_queue_get_length(dscropper->data_queue) >= MAX_QUEUE_SIZE) continue;
       
       NvBufSurfaceParams * currentFrameParams = in_surf->surfaceList + frame_meta->batch_id;
       NvBufSurfaceColorFormat colorFormat = currentFrameParams->colorFormat;
@@ -726,36 +726,36 @@ gst_dsclipper_submit_input_buffer (GstBaseTransform * btrans,
         printf("nppiResize_8u_C3R failed with error %d", stat);
       }
     
-      g_mutex_lock (&dsclipper->data_lock);
-      g_queue_push_tail (dsclipper->data_queue, host_ptr);
-      g_queue_push_tail (dsclipper->data_queue, info);
-      g_mutex_unlock (&dsclipper->data_lock);
+      g_mutex_lock (&dscropper->data_lock);
+      g_queue_push_tail (dscropper->data_queue, host_ptr);
+      g_queue_push_tail (dscropper->data_queue, info);
+      g_mutex_unlock (&dscropper->data_lock);
       // break;
     }
     cudaFree(rgb_frame_ptr);
   }
   
-  nvtxDomainRangeEnd(dsclipper->nvtx_domain, buf_process_range);
+  nvtxDomainRangeEnd(dscropper->nvtx_domain, buf_process_range);
 
   /* Queue a push buffer batch. This batch is not inferred. This batch is to
    * signal the process thread that there are no more batches
    * belonging to this input buffer and this GstBuffer can be pushed to
    * downstream element once all the previous processing is done. */
-  buf_push_batch = new GstDsClipperBatch;
+  buf_push_batch = new GstDsCropperBatch;
   buf_push_batch->inbuf = inbuf;
   buf_push_batch->push_buffer = TRUE;
   buf_push_batch->nvtx_complete_buf_range = buf_process_range;
 
-  g_mutex_lock (&dsclipper->process_lock);
+  g_mutex_lock (&dscropper->process_lock);
   /* Check if this is a push buffer or event marker batch. If yes, no need to
    * queue the input for inferencing. */
   if (buf_push_batch->push_buffer) {
     /* Push the batch info structure in the processing queue and notify the
      * process thread that a new batch has been queued. */
-    g_queue_push_tail (dsclipper->process_queue, buf_push_batch);
-    g_cond_broadcast (&dsclipper->process_cond);
+    g_queue_push_tail (dscropper->process_queue, buf_push_batch);
+    g_cond_broadcast (&dscropper->process_cond);
   }
-  g_mutex_unlock (&dsclipper->process_lock);
+  g_mutex_unlock (&dscropper->process_lock);
 
   flow_ret = GST_FLOW_OK;
 
@@ -771,10 +771,10 @@ error:
  * be caught by the application.
  */
 static GstFlowReturn
-gst_dsclipper_generate_output (GstBaseTransform * btrans, GstBuffer ** outbuf)
+gst_dscropper_generate_output (GstBaseTransform * btrans, GstBuffer ** outbuf)
 {
-  GstDsClipper *dsclipper = GST_DSCLIPPER (btrans);
-  return dsclipper->last_flow_ret;
+  GstDsCropper *dscropper = GST_DSCROPPER (btrans);
+  return dscropper->last_flow_ret;
 }
 
 /**
@@ -782,9 +782,9 @@ gst_dsclipper_generate_output (GstBaseTransform * btrans, GstBuffer ** outbuf)
  * buffer in form of NvDsMeta and push the buffer to downstream element.
  */
 static gpointer
-gst_dsclipper_output_loop (gpointer data)
+gst_dscropper_output_loop (gpointer data)
 {
-  GstDsClipper *dsclipper = GST_DSCLIPPER (data);
+  GstDsCropper *dscropper = GST_DSCROPPER (data);
   NvDsObjectMeta *obj_meta = NULL;
   gdouble scale_ratio = 1.0;
 
@@ -797,51 +797,51 @@ gst_dsclipper_output_loop (gpointer data)
   std::string nvtx_str;
 
   nvtx_str =
-      "gst-dsclipper_output-loop_uid=" + std::to_string (dsclipper->unique_id);
+      "gst-dscropper_output-loop_uid=" + std::to_string (dscropper->unique_id);
 
-  g_mutex_lock (&dsclipper->process_lock);
+  g_mutex_lock (&dscropper->process_lock);
 
   /* Run till signalled to stop. */
-  while (!dsclipper->stop) {
-    std::unique_ptr < GstDsClipperBatch > batch = nullptr;
+  while (!dscropper->stop) {
+    std::unique_ptr < GstDsCropperBatch > batch = nullptr;
 
     /* Wait if processing queue is empty. */
-    if (g_queue_is_empty (dsclipper->process_queue)) {
-      g_cond_wait (&dsclipper->process_cond, &dsclipper->process_lock);
+    if (g_queue_is_empty (dscropper->process_queue)) {
+      g_cond_wait (&dscropper->process_cond, &dscropper->process_lock);
       continue;
     }
 
     /* Pop a batch from the element's process queue. */
-    batch.reset ((GstDsClipperBatch *)
-        g_queue_pop_head (dsclipper->process_queue));
-    g_cond_broadcast (&dsclipper->process_cond);
+    batch.reset ((GstDsCropperBatch *)
+        g_queue_pop_head (dscropper->process_queue));
+    g_cond_broadcast (&dscropper->process_cond);
 
     /* Event marker used for synchronization. No need to process further. */
     if (batch->event_marker) {
       continue;
     }
 
-    g_mutex_unlock (&dsclipper->process_lock);
+    g_mutex_unlock (&dscropper->process_lock);
 
     /* Need to only push buffer to downstream element. This batch was not
      * actually submitted for inferencing. */
     if (batch->push_buffer) {
-      nvtxDomainRangeEnd(dsclipper->nvtx_domain, batch->nvtx_complete_buf_range);
+      nvtxDomainRangeEnd(dscropper->nvtx_domain, batch->nvtx_complete_buf_range);
 
       nvds_set_output_system_timestamp (batch->inbuf,
-          GST_ELEMENT_NAME (dsclipper));
+          GST_ELEMENT_NAME (dscropper));
 
       GstFlowReturn flow_ret =
-          gst_pad_push (GST_BASE_TRANSFORM_SRC_PAD (dsclipper),
+          gst_pad_push (GST_BASE_TRANSFORM_SRC_PAD (dscropper),
           batch->inbuf);
-      if (dsclipper->last_flow_ret != flow_ret) {
+      if (dscropper->last_flow_ret != flow_ret) {
         switch (flow_ret) {
             /* Signal the application for pad push errors by posting a error message
              * on the pipeline bus. */
           case GST_FLOW_ERROR:
           case GST_FLOW_NOT_LINKED:
           case GST_FLOW_NOT_NEGOTIATED:
-            GST_ELEMENT_ERROR (dsclipper, STREAM, FAILED,
+            GST_ELEMENT_ERROR (dscropper, STREAM, FAILED,
                 ("Internal data stream error."),
                 ("streaming stopped, reason %s (%d)",
                     gst_flow_get_name (flow_ret), flow_ret));
@@ -850,27 +850,27 @@ gst_dsclipper_output_loop (gpointer data)
             break;
         }
       }
-      dsclipper->last_flow_ret = flow_ret;
-      g_mutex_lock (&dsclipper->process_lock);
+      dscropper->last_flow_ret = flow_ret;
+      g_mutex_lock (&dscropper->process_lock);
       continue;
     }
 
     nvtx_str = "dequeueOutputAndAttachMeta batch_num=" + std::to_string(batch->inbuf_batch_num);
     eventAttrib.message.ascii = nvtx_str.c_str();
-    nvtxDomainRangePushEx(dsclipper->nvtx_domain, &eventAttrib);
+    nvtxDomainRangePushEx(dscropper->nvtx_domain, &eventAttrib);
 
-    g_mutex_lock (&dsclipper->process_lock);
+    g_mutex_lock (&dscropper->process_lock);
 
 #ifdef WITH_OPENCV
-    g_queue_push_tail (dsclipper->buf_queue, batch->cvmat);
+    g_queue_push_tail (dscropper->buf_queue, batch->cvmat);
 #else
-    g_queue_push_tail (dsclipper->buf_queue, batch->inter_buf);
+    g_queue_push_tail (dscropper->buf_queue, batch->inter_buf);
 #endif
-    g_cond_broadcast (&dsclipper->buf_cond);
+    g_cond_broadcast (&dscropper->buf_cond);
 
-    nvtxDomainRangePop (dsclipper->nvtx_domain);
+    nvtxDomainRangePop (dscropper->nvtx_domain);
   }
-  g_mutex_unlock (&dsclipper->process_lock);
+  g_mutex_unlock (&dscropper->process_lock);
 
   return nullptr;
 }
@@ -894,10 +894,10 @@ void saveImageToRaw(const char* filename, void* data, size_t dataSize, int width
 }
 
 static gpointer
-gst_dsclipper_data_loop (gpointer data)
+gst_dscropper_data_loop (gpointer data)
 {
-  GstDsClipper *dsclipper = GST_DSCLIPPER (data);
-  // DsClipperOutput *output;
+  GstDsCropper *dscropper = GST_DSCROPPER (data);
+  // DsCropperOutput *output;
   NvDsObjectMeta *obj_meta = NULL;
   gdouble scale_ratio = 1.0;
   auto start_time = std::chrono::system_clock::now();
@@ -915,22 +915,22 @@ gst_dsclipper_data_loop (gpointer data)
   std::string nvtx_str;
 
   nvtx_str =
-      "gst-dsclipper_output-loop_uid=" + std::to_string (dsclipper->unique_id);
+      "gst-dscropper_output-loop_uid=" + std::to_string (dscropper->unique_id);
 
 
   /* Run till signalled to stop. */
-  while (!dsclipper->stop) {
+  while (!dscropper->stop) {
     // sleep 1 second
     g_usleep(1000);
-    if (g_queue_is_empty (dsclipper->data_queue)) {
+    if (g_queue_is_empty (dscropper->data_queue)) {
       continue;
     }
     
-    g_mutex_lock (&dsclipper->data_lock);
+    g_mutex_lock (&dscropper->data_lock);
     
-    host_ptr = g_queue_pop_head(dsclipper->data_queue);
-    ClippedSurfaceInfo *info = (ClippedSurfaceInfo *) g_queue_pop_head (dsclipper->data_queue);
-    g_mutex_unlock (&dsclipper->data_lock);
+    host_ptr = g_queue_pop_head(dscropper->data_queue);
+    ClippedSurfaceInfo *info = (ClippedSurfaceInfo *) g_queue_pop_head (dscropper->data_queue);
+    g_mutex_unlock (&dscropper->data_lock);
 
     printf("%s\n", info->filename);
 
@@ -964,18 +964,18 @@ gst_dsclipper_data_loop (gpointer data)
  * Boiler plate for registering a plugin and an element.
  */
 static gboolean
-dsclipper_plugin_init (GstPlugin * plugin)
+dscropper_plugin_init (GstPlugin * plugin)
 {
-  GST_DEBUG_CATEGORY_INIT (gst_dsclipper_debug, "dsclipper", 0,
-      "dsclipper plugin");
+  GST_DEBUG_CATEGORY_INIT (gst_dscropper_debug, "dscropper", 0,
+      "dscropper plugin");
 
-  return gst_element_register (plugin, "dsclipper", GST_RANK_PRIMARY,
-      GST_TYPE_DSCLIPPER);
+  return gst_element_register (plugin, "dscropper", GST_RANK_PRIMARY,
+      GST_TYPE_DSCROPPER);
 }
 
 GST_PLUGIN_DEFINE (GST_VERSION_MAJOR,
     GST_VERSION_MINOR,
-    nvdsgst_dsclipper,
-    DESCRIPTION, dsclipper_plugin_init, "6.3", LICENSE, BINARY_PACKAGE,
+    nvdsgst_dscropper,
+    DESCRIPTION, dscropper_plugin_init, "6.3", LICENSE, BINARY_PACKAGE,
     URL)
 
