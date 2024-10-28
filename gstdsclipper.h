@@ -47,6 +47,8 @@
 #include <mutex>
 #include <thread>
 #include <vector>
+#include <unordered_map>
+#include <list>
 
 /* Package and library details required for plugin_init */
 #define PACKAGE "dsclipper"
@@ -74,6 +76,16 @@ typedef struct _GstDsClipperClass GstDsClipperClass;
 /** Maximum batch size to be supported by dsclipper. */
 #define NVDSCLIPPER_MAX_BATCH_SIZE G_MAXUINT
 
+typedef struct
+{
+  guint width;
+  guint height;
+  guint left;
+  guint top;
+  guint counter;
+} ClipperObjectInfo;
+
+
 struct _GstDsClipper
 {
   GstBaseTransform base_trans;
@@ -90,6 +102,9 @@ struct _GstDsClipper
 
   GQueue *data_queue;
 
+  std::unordered_map<guint64, ClipperObjectInfo> *object_infos;
+  std::list<guint64> *insertion_order;
+  
   /** Gcondition for process queue**/
   GCond process_cond;
 
@@ -142,6 +157,7 @@ struct _GstDsClipper
 
   gchar *output_path;
   gchar *name_format;
+  gint interval;
   gint operate_on_gie_id;
   std::vector<gboolean> *operate_on_class_ids;
 };
@@ -206,7 +222,8 @@ typedef struct
   size_t pitch;
   size_t dataSize;
   NvBufSurfaceColorFormat colorFormat;
-} HostFrameInfo;
+  gchar *filename;
+} ClippedSurfaceInfo;
 
 /** Boiler plate stuff */
 struct _GstDsClipperClass

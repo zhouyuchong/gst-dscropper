@@ -54,7 +54,8 @@ enum
   PROP_OPERATE_ON_GIE_ID,
   PROP_OPERATE_ON_CLASS_IDS,
   PROP_NAME_FORMAT,
-  PROP_OUTPUT_PATH
+  PROP_OUTPUT_PATH,
+  PROP_INTERVAL
 };
 
 #define CHECK_NVDS_MEMORY_AND_GPUID(object, surface)  \
@@ -80,7 +81,7 @@ enum
 #define DEFAULT_OPERATE_ON_GIE_ID -1
 #define DEFAULT_OUTPUT_PATH ""
 #define DEFAULT_NAME_FORMAT "frame;trackid;classid;conf"
-#define DEFAULT_INTERVAL 0
+#define DEFAULT_INTERVAL -1
 
 #define RGB_BYTES_PER_PIXEL 3
 #define RGBA_BYTES_PER_PIXEL 4
@@ -91,6 +92,8 @@ enum
 #define MIN_INPUT_OBJECT_HEIGHT 16
 
 #define MAX_QUEUE_SIZE 20
+#define MAX_OBJ_INFO_SIZE 50
+
 
 #define CHECK_NPP_STATUS(npp_status,error_str) do { \
   if ((npp_status) != NPP_SUCCESS) { \
@@ -224,6 +227,13 @@ gst_dsclipper_class_init (GstDsClipperClass * klass)
           (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
               GST_PARAM_MUTABLE_READY)));
 
+  g_object_class_install_property (gobject_class, PROP_INTERVAL,
+      g_param_spec_int ("interval", "Interval",
+          "Specifies number of consecutive batches to be skipped for clip",
+          -1, G_MAXINT, DEFAULT_INTERVAL,
+          (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+              GST_PARAM_MUTABLE_READY)));
+
   g_object_class_install_property (gobject_class, PROP_OPERATE_ON_CLASS_IDS,
       g_param_spec_string ("operated-on-class-ids", "Operate on Class ids",
           "Operate on objects with specified class ids\n"
@@ -298,6 +308,10 @@ gst_dsclipper_set_property (GObject * object, guint prop_id,
       dsclipper->operate_on_gie_id = g_value_get_int (value);
       break;
       
+    case PROP_INTERVAL:
+      dsclipper->interval = g_value_get_int (value);
+      break;
+      
     case PROP_OPERATE_ON_CLASS_IDS:
     {
       std::stringstream str (g_value_get_string (value));
@@ -353,6 +367,10 @@ gst_dsclipper_get_property (GObject * object, guint prop_id,
     }
       break;
 
+    case PROP_INTERVAL:
+      g_value_set_int (value, dsclipper->interval);
+      break;
+
     case PROP_OUTPUT_PATH:
       dsclipper->output_path = g_value_dup_string (value);
       break;
@@ -394,7 +412,8 @@ gst_dsclipper_start (GstBaseTransform * btrans)
   dsclipper->process_queue = g_queue_new ();
   dsclipper->buf_queue = g_queue_new ();
   dsclipper->data_queue = g_queue_new ();
-
+  dsclipper->object_infos = new std::unordered_map<guint64, ClipperObjectInfo>();
+  dsclipper->insertion_order = new std::list<guint64>();
 
   /* Start a thread which will pop output from the algorithm, form NvDsMeta and
    * push buffers to the next element. */
@@ -477,9 +496,13 @@ gst_dsclipper_stop (GstBaseTransform * btrans)
     cudaStreamDestroy (dsclipper->cuda_stream);
   dsclipper->cuda_stream = NULL;
 
+  if (dsclipper->object_infos) delete dsclipper->object_infos;
+  dsclipper->object_infos = nullptr;
+  delete dsclipper->insertion_order;
+  dsclipper->insertion_order = nullptr;
+
   g_queue_free (dsclipper->process_queue);
   g_queue_free (dsclipper->data_queue);
-
   g_queue_free (dsclipper->buf_queue);
   
   return TRUE;
@@ -506,7 +529,7 @@ error:
 }
 
 static inline gboolean
-should_crop_object (GstDsClipper *dsclipper, NvDsObjectMeta * obj_meta, gulong frame_num)
+should_crop_object (GstDsClipper *dsclipper, NvDsObjectMeta * obj_meta, guint counter)
 {
   if (dsclipper->operate_on_gie_id > -1 &&
       obj_meta->unique_component_id != dsclipper->operate_on_gie_id)
@@ -516,6 +539,15 @@ should_crop_object (GstDsClipper *dsclipper, NvDsObjectMeta * obj_meta, gulong f
       ((int) dsclipper->operate_on_class_ids->size () <= obj_meta->class_id ||
           dsclipper->operate_on_class_ids->at (obj_meta->class_id) == FALSE)) {
     return FALSE;
+  }
+  if (obj_meta->object_id  == UNTRACKED_OBJECT_ID) {
+    GST_WARNING_OBJECT (dsclipper, "Untracked objects in metadata. Cannot"
+      " use interval mode on untracked objects.");
+    return FALSE;
+  }
+  if (dsclipper->interval == -1 && counter) return FALSE;
+  if (dsclipper->interval > 0) {
+    if (counter % (dsclipper->interval + 1) != 0) return FALSE;
   }
   return TRUE;
 }
@@ -580,6 +612,7 @@ gst_dsclipper_submit_input_buffer (GstBaseTransform * btrans,
   NppStatus stat;
 
   gboolean need_clip = FALSE;  
+  char surface_name[100];
   
 
   for (l_frame = batch_meta->frame_meta_list; l_frame != NULL;
@@ -587,98 +620,119 @@ gst_dsclipper_submit_input_buffer (GstBaseTransform * btrans,
     frame_meta = (NvDsFrameMeta *) (l_frame->data);
     void *host_ptr = NULL;
     void *rgb_frame_ptr = NULL;
+    void *rgb_cropped_object_ptr = NULL;
+    
+  
     for (l_obj = frame_meta->obj_meta_list; l_obj != NULL;
         l_obj = l_obj->next) {
       obj_meta = (NvDsObjectMeta *) (l_obj->data);
 
-      need_clip = should_crop_object (dsclipper, obj_meta, frame_meta->frame_num);
-      // printf("cls id: %d, need clip: %d\n", obj_meta->class_id, need_clip);
-      // std::cout<<obj_meta->object_id<<" "<<UNTRACKED_OBJECT_ID<<std::endl;
-      // continue;
+      if (obj_meta->object_id == UNTRACKED_OBJECT_ID) {
+        GST_WARNING_OBJECT(dsclipper, "Untracked objects in metadata. Cannot apply clipping on untracked objects.");
+        printf("untracked\n");
+        continue;
+      }
+
+      auto it = dsclipper->object_infos->find(obj_meta->object_id);
+      if (it != dsclipper->object_infos->end()) {
+          it->second.counter += 1;
+          it->second.width = obj_meta->rect_params.width;
+          it->second.height = obj_meta->rect_params.height;
+          it->second.left = obj_meta->rect_params.left;
+          it->second.top = obj_meta->rect_params.top;
+      } else {
+        if (dsclipper->object_infos->size() == MAX_OBJ_INFO_SIZE) {
+          dsclipper->object_infos->erase(dsclipper->insertion_order->front());
+          dsclipper->insertion_order->pop_front();
+        }
+          ClipperObjectInfo object_info;
+          object_info.counter = 0;
+          object_info.width = obj_meta->rect_params.width;
+          object_info.height = obj_meta->rect_params.height;
+          object_info.left = obj_meta->rect_params.left;
+          object_info.top = obj_meta->rect_params.top;
+          dsclipper->object_infos->insert(std::make_pair(obj_meta->object_id, object_info));
+          dsclipper->insertion_order->push_back(obj_meta->object_id);
+      }
+      it = dsclipper->object_infos->find(obj_meta->object_id);
+      need_clip = should_crop_object (dsclipper, obj_meta, it->second.counter);
+      // printf("track id: %d, counter: %d, need clip: %d\n", obj_meta->object_id, it->second.counter, need_clip);
+
       if (!need_clip) continue;
 
-      // /* Should not process on objects smaller than MIN_INPUT_OBJECT_WIDTH x MIN_INPUT_OBJECT_HEIGHT
-      //   * since it will cause hardware scaling issues. */
-      // if (obj_meta->rect_params.width < MIN_INPUT_OBJECT_WIDTH ||
-      //     obj_meta->rect_params.height < MIN_INPUT_OBJECT_HEIGHT)
-      //   continue;
-
-      // if (!nvinfer->operate_on_class_ids->empty () &&
-      //     ((int) nvinfer->operate_on_class_ids->size () <= obj_meta->class_id ||
-      //         nvinfer->operate_on_class_ids->at (obj_meta->class_id) == FALSE)) {
-      // }
+      if (g_queue_get_length(dsclipper->data_queue) >= MAX_QUEUE_SIZE) continue;
       
+      NvBufSurfaceParams * currentFrameParams = in_surf->surfaceList + frame_meta->batch_id;
+      NvBufSurfaceColorFormat colorFormat = currentFrameParams->colorFormat;
+      size_t framePitch = currentFrameParams->pitch;
+      size_t frameSize = currentFrameParams->dataSize;
+      uint frameWidth = currentFrameParams->width;
+      uint frameHeight = currentFrameParams->height;
+      size_t pitch;
+      cudaMallocPitch(&rgb_frame_ptr, &pitch, framePitch * 3, frameHeight);
 
-      if (g_queue_get_length(dsclipper->data_queue) < MAX_QUEUE_SIZE) {
-        NvBufSurfaceParams * currentFrameParams = in_surf->surfaceList + frame_meta->batch_id;
-        NvBufSurfaceColorFormat colorFormat = currentFrameParams->colorFormat;
-        size_t framePitch = currentFrameParams->pitch;
-        size_t frameSize = currentFrameParams->dataSize;
-        uint frameWidth = currentFrameParams->width;
-        uint frameHeight = currentFrameParams->height;
-
-        HostFrameInfo* info = g_new(HostFrameInfo, 1);
-
-
-        // we should transform frame to RGB here while it is on device
+      ClippedSurfaceInfo* info = g_new(ClippedSurfaceInfo, 1);
+      memset(surface_name, 0, sizeof(surface_name));
+      sprintf(surface_name, "frm%d_tid%d_conf%d.png", frame_meta->frame_num, obj_meta->object_id, (int)(obj_meta->confidence*100));  
+      info->filename = g_strdup(surface_name);
+      info->width = obj_meta->rect_params.width;
+      info->height = obj_meta->rect_params.height;
+      info->pitch = obj_meta->rect_params.width * 3;
+      if (colorFormat < 29 && colorFormat > 19) {
+        printf("no need to trans\n");
+        cudaMemcpy((void *)rgb_frame_ptr,
+                (void *)currentFrameParams->dataPtr,
+                frameSize,
+                cudaMemcpyDeviceToDevice);
+      } else {
+        const Npp8u* y_plane;                // Pointer to the Y plane
+        const Npp8u* uv_plane;               // Pointer to the UV plane
+        y_plane = static_cast<const Npp8u*>(currentFrameParams->dataPtr);
+        uv_plane = y_plane + (framePitch * frameHeight);
+        const Npp8u* pSrc[2];
+        pSrc[0] = y_plane;  // Y plane pointer
+        pSrc[1] = uv_plane;
         
-        // no need since it is already in RGB format
-        if (colorFormat < 29 && colorFormat > 19) {
-          info->dataSize = currentFrameParams->dataSize;
-          info->width = frameWidth;
-          info->height = frameHeight;
-          info->colorFormat = colorFormat;
-          info->pitch = framePitch;
-          cudaMallocHost(&host_ptr, frameSize);
-          cudaMemcpy((void *)host_ptr,
-                  (void *)currentFrameParams->dataPtr,
-                  frameSize,
-                  cudaMemcpyDeviceToHost); 
-        } else {
-          const Npp8u* y_plane;                // Pointer to the Y plane
-          const Npp8u* uv_plane;               // Pointer to the UV plane
-          y_plane = static_cast<const Npp8u*>(currentFrameParams->dataPtr);
-          uv_plane = y_plane + (framePitch * frameHeight);
-          const Npp8u* pSrc[2];
-          pSrc[0] = y_plane;  // Y plane pointer
-          pSrc[1] = uv_plane;
-          size_t pitch;
-          // rgb_frame_ptr is on device
-          cudaMallocPitch(&rgb_frame_ptr, &pitch, framePitch * 3, frameHeight);
-          
-          stat = nppiNV12ToRGB_8u_P2C3R(pSrc,
-                            framePitch, 
-                            static_cast<Npp8u*>(rgb_frame_ptr), 
-                            pitch,
-                            NppiSize {frameWidth, frameHeight});
-          if (stat != NPP_SUCCESS) {
-            printf("nppiNV12ToRGB_8u_P2C3R failed with error %d", stat);
-          }
-
-          cudaMallocHost(&host_ptr, pitch * frameHeight);
-          cudaMemcpy((void *)host_ptr,
-                      (void *)rgb_frame_ptr,
-                      pitch * frameHeight,
-                      cudaMemcpyDeviceToHost);
-
-          cudaFree(rgb_frame_ptr);
-          info->dataSize = pitch * frameHeight;
-          info->width = frameWidth;
-          info->height = frameHeight;
-          info->colorFormat = colorFormat;
-          info->pitch = pitch;
-          
+        // rgb_frame_ptr is on device
+        // cudaMallocPitch(&rgb_frame_ptr, &pitch, framePitch * 3, frameHeight);
+        stat = nppiNV12ToRGB_8u_P2C3R(pSrc,
+                          framePitch, 
+                          static_cast<Npp8u*>(rgb_frame_ptr), 
+                          pitch,
+                          NppiSize {frameWidth, frameHeight});
+        if (stat != NPP_SUCCESS) {
+          printf("nppiNV12ToRGB_8u_P2C3R failed with error %d", stat);
         }
-        
-
-        
-        g_mutex_lock (&dsclipper->data_lock);
-        g_queue_push_tail (dsclipper->data_queue, host_ptr);
-        g_queue_push_tail (dsclipper->data_queue, info);
-        g_mutex_unlock (&dsclipper->data_lock);
-        break;
       }
+
+      cudaMallocHost(&host_ptr, obj_meta->rect_params.width * obj_meta->rect_params.height * 3);
+      // NppiRect oSrcROI_frame = {bbox[0], bbox[1], bbox[2], bbox[3]};
+      // NppiRect oSrcROI = {0, 0, cropped_frame_width, cropped_frame_height};
+      // NppiSize oSizeROI;
+      // oSizeROI.width  = cropped_frame_width;
+      // oSizeROI.height = cropped_frame_height;
+
+      stat = nppiResize_8u_C3R(static_cast<const Npp8u*>(rgb_frame_ptr), 
+                                pitch, 
+                                NppiSize {frameWidth, frameHeight}, 
+                                NppiRect {obj_meta->rect_params.left, obj_meta->rect_params.top, obj_meta->rect_params.width, obj_meta->rect_params.height}, 
+                                static_cast<Npp8u*>(host_ptr), 
+                                obj_meta->rect_params.width * 3, 
+                                NppiSize {obj_meta->rect_params.width, obj_meta->rect_params.height},
+                                NppiRect {0, 0, obj_meta->rect_params.width, obj_meta->rect_params.height},
+                                NPPI_INTER_LINEAR);
+
+      if (stat != NPP_SUCCESS) {
+        printf("nppiResize_8u_C3R failed with error %d", stat);
+      }
+    
+      g_mutex_lock (&dsclipper->data_lock);
+      g_queue_push_tail (dsclipper->data_queue, host_ptr);
+      g_queue_push_tail (dsclipper->data_queue, info);
+      g_mutex_unlock (&dsclipper->data_lock);
+      // break;
     }
+    cudaFree(rgb_frame_ptr);
   }
   
   nvtxDomainRangeEnd(dsclipper->nvtx_domain, buf_process_range);
@@ -875,16 +929,16 @@ gst_dsclipper_data_loop (gpointer data)
     g_mutex_lock (&dsclipper->data_lock);
     
     host_ptr = g_queue_pop_head(dsclipper->data_queue);
-    HostFrameInfo *info = (HostFrameInfo *) g_queue_pop_head (dsclipper->data_queue);
+    ClippedSurfaceInfo *info = (ClippedSurfaceInfo *) g_queue_pop_head (dsclipper->data_queue);
     g_mutex_unlock (&dsclipper->data_lock);
 
-    printf("pop info: %d %d %ld %ld\n", info->width, info->height, info->pitch, info->dataSize);
+    printf("%s\n", info->filename);
 
     // start_time = std::chrono::system_clock::now();
-    char image_name[100];
-    static guint cnt = 0;
-    sprintf(image_name, "out_%d.png", cnt);  
-    stbi_write_png(image_name, info->width, info->height, 3, static_cast<unsigned char*>(host_ptr), info->pitch);
+    // char image_name[100];
+    // static guint cnt = 0;
+    // sprintf(image_name, "out_%d.png", cnt);  
+    stbi_write_png(info->filename, info->width, info->height, 3, static_cast<unsigned char*>(host_ptr), info->pitch);
     
     // saveImageToRaw(image_name, host_ptr, tmp.dataSize, tmp.width, tmp.height, tmp.pitch);
     // // }
@@ -892,7 +946,7 @@ gst_dsclipper_data_loop (gpointer data)
     // duration = end_time - start_time;
     // duration_seconds = std::chrono::duration_cast<std::chrono::microseconds>(duration).count();
     // printf("time usage of saving: %f\n", duration_seconds);
-    cnt++;
+    // cnt++;
 
     if (host_ptr){
       // printf("release host ptr\n");
