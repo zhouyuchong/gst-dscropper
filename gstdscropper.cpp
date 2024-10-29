@@ -528,6 +528,35 @@ error:
   return FALSE;
 }
 
+std::string formatString(const char* input, int frame_num, int track_id, int class_id, float conf) {
+    std::istringstream iss(input);
+    std::string token;
+    std::ostringstream oss; 
+
+    while (getline(iss, token, ';')) {
+        if (token == "frame") {
+            oss << "frm" << frame_num << "_";
+        } else if (token == "trackid") {
+            oss << "tid" << track_id << "_";
+        } else if (token == "classid") {
+            oss << "cls" << class_id << "_";
+        } else if (token == "conf") {
+            oss << "conf" << (int)(conf*100) << "_";
+        } else {
+            std::cerr << "Unknown category: " << token << std::endl;
+        }
+    }
+
+    std::string result = oss.str();
+    // 移除末尾的逗号和空格
+    if (!result.empty() && result.back() == ' ') {
+        result.pop_back();
+        result.pop_back();
+    }
+
+    return result;
+}
+
 static inline gboolean
 should_crop_object (GstDsCropper *dscropper, NvDsObjectMeta * obj_meta, guint counter)
 {
@@ -613,7 +642,6 @@ gst_dscropper_submit_input_buffer (GstBaseTransform * btrans,
 
   gboolean need_clip = FALSE;  
   char surface_name[100];
-  
 
   for (l_frame = batch_meta->frame_meta_list; l_frame != NULL;
       l_frame = l_frame->next) {
@@ -656,7 +684,6 @@ gst_dscropper_submit_input_buffer (GstBaseTransform * btrans,
       }
       it = dscropper->object_infos->find(obj_meta->object_id);
       need_clip = should_crop_object (dscropper, obj_meta, it->second.counter);
-      // printf("track id: %d, counter: %d, need clip: %d\n", obj_meta->object_id, it->second.counter, need_clip);
 
       if (!need_clip) continue;
 
@@ -673,7 +700,8 @@ gst_dscropper_submit_input_buffer (GstBaseTransform * btrans,
 
       ClippedSurfaceInfo* info = g_new(ClippedSurfaceInfo, 1);
       memset(surface_name, 0, sizeof(surface_name));
-      sprintf(surface_name, "frm%d_tid%d_conf%d.png", frame_meta->frame_num, obj_meta->object_id, (int)(obj_meta->confidence*100));  
+      std::string formattedString = formatString(dscropper->name_format, frame_meta->frame_num, obj_meta->object_id, obj_meta->class_id, obj_meta->confidence);
+      sprintf(surface_name, "%s/%s.png", dscropper->output_path, formattedString.c_str());  
       info->filename = g_strdup(surface_name);
       info->width = obj_meta->rect_params.width;
       info->height = obj_meta->rect_params.height;
@@ -699,27 +727,22 @@ gst_dscropper_submit_input_buffer (GstBaseTransform * btrans,
                           framePitch, 
                           static_cast<Npp8u*>(rgb_frame_ptr), 
                           pitch,
-                          NppiSize {frameWidth, frameHeight});
+                          NppiSize {static_cast<int>(frameWidth), static_cast<int>(frameHeight)});
         if (stat != NPP_SUCCESS) {
           printf("nppiNV12ToRGB_8u_P2C3R failed with error %d", stat);
         }
       }
 
       cudaMallocHost(&host_ptr, obj_meta->rect_params.width * obj_meta->rect_params.height * 3);
-      // NppiRect oSrcROI_frame = {bbox[0], bbox[1], bbox[2], bbox[3]};
-      // NppiRect oSrcROI = {0, 0, cropped_frame_width, cropped_frame_height};
-      // NppiSize oSizeROI;
-      // oSizeROI.width  = cropped_frame_width;
-      // oSizeROI.height = cropped_frame_height;
 
       stat = nppiResize_8u_C3R(static_cast<const Npp8u*>(rgb_frame_ptr), 
                                 pitch, 
-                                NppiSize {frameWidth, frameHeight}, 
-                                NppiRect {obj_meta->rect_params.left, obj_meta->rect_params.top, obj_meta->rect_params.width, obj_meta->rect_params.height}, 
+                                NppiSize {static_cast<int>(frameWidth), static_cast<int>(frameHeight)}, 
+                                NppiRect {static_cast<int>(obj_meta->rect_params.left), static_cast<int>(obj_meta->rect_params.top), static_cast<int>(obj_meta->rect_params.width), static_cast<int>(obj_meta->rect_params.height)}, 
                                 static_cast<Npp8u*>(host_ptr), 
                                 obj_meta->rect_params.width * 3, 
-                                NppiSize {obj_meta->rect_params.width, obj_meta->rect_params.height},
-                                NppiRect {0, 0, obj_meta->rect_params.width, obj_meta->rect_params.height},
+                                NppiSize {static_cast<int>(obj_meta->rect_params.width), static_cast<int>(obj_meta->rect_params.height)},
+                                NppiRect {0, 0, static_cast<int>(obj_meta->rect_params.width), static_cast<int>(obj_meta->rect_params.height)},
                                 NPPI_INTER_LINEAR);
 
       if (stat != NPP_SUCCESS) {
@@ -882,14 +905,11 @@ void saveImageToRaw(const char* filename, void* data, size_t dataSize, int width
         std::cerr << "Unable to open file for writing: " << filename << std::endl;
         return;
     }
-
     // Assuming the color format is one of the standard CUDA channel formats
     // For simplicity, let's assume it's unsigned char and 4 channels (e.g., RGBA)
     for (int y = 0; y < height; ++y) {
         file.write(static_cast<const char*>(data) + y * pitch, width * 4); // Assuming 4 bytes per pixel (RGBA)
     }
-
-
     file.close();
 }
 
@@ -917,12 +937,10 @@ gst_dscropper_data_loop (gpointer data)
   nvtx_str =
       "gst-dscropper_output-loop_uid=" + std::to_string (dscropper->unique_id);
 
-
   /* Run till signalled to stop. */
   while (!dscropper->stop) {
-    // sleep 1 second
-    g_usleep(1000);
     if (g_queue_is_empty (dscropper->data_queue)) {
+      g_usleep(10000);
       continue;
     }
     
@@ -932,24 +950,11 @@ gst_dscropper_data_loop (gpointer data)
     ClippedSurfaceInfo *info = (ClippedSurfaceInfo *) g_queue_pop_head (dscropper->data_queue);
     g_mutex_unlock (&dscropper->data_lock);
 
-    printf("%s\n", info->filename);
-
-    // start_time = std::chrono::system_clock::now();
-    // char image_name[100];
-    // static guint cnt = 0;
-    // sprintf(image_name, "out_%d.png", cnt);  
     stbi_write_png(info->filename, info->width, info->height, 3, static_cast<unsigned char*>(host_ptr), info->pitch);
     
     // saveImageToRaw(image_name, host_ptr, tmp.dataSize, tmp.width, tmp.height, tmp.pitch);
-    // // }
-    // end_time = std::chrono::system_clock::now();
-    // duration = end_time - start_time;
-    // duration_seconds = std::chrono::duration_cast<std::chrono::microseconds>(duration).count();
-    // printf("time usage of saving: %f\n", duration_seconds);
-    // cnt++;
 
     if (host_ptr){
-      // printf("release host ptr\n");
       cudaFreeHost(host_ptr);
     }
     g_free(info);

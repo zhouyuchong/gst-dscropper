@@ -49,6 +49,7 @@
 #include <vector>
 #include <unordered_map>
 #include <list>
+#include <string>
 
 /* Package and library details required for plugin_init */
 #define PACKAGE "dscropper"
