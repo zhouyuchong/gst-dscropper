@@ -29,10 +29,10 @@ endif
 TARGET_DEVICE = $(shell gcc -dumpmachine | cut -f1 -d -)
 CXX:= g++
 
-SRCS:= gstdsclipper.cpp
+SRCS:= gstdscropper.cpp
 
 INCS:= $(wildcard *.h)
-LIB:=libnvdsgst_dsclipper.so
+LIB:=libnvdsgst_dscropper.so
 
 NVDS_VERSION:=6.3
 
