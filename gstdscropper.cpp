@@ -212,8 +212,8 @@ gst_dscropper_class_init (GstDsCropperClass * klass)
               
   g_object_class_install_property (gobject_class, PROP_NAME_FORMAT,
       g_param_spec_string ("name-format", "File Name Format",
-          "Format of the output file name.\n",
-          "\t\t\t frameidx_trackid_classid_conf."
+          "Format of the output file name.\n"
+          "\t\t\t frameidx_trackid_classid_conf.",
           DEFAULT_NAME_FORMAT,
           (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
               GST_PARAM_MUTABLE_PLAYING)));
@@ -373,6 +373,10 @@ gst_dscropper_get_property (GObject * object, guint prop_id,
 
     case PROP_OUTPUT_PATH:
       dscropper->output_path = g_value_dup_string (value);
+      break;
+
+    case PROP_NAME_FORMAT:
+      dscropper->name_format = g_value_dup_string (value);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
