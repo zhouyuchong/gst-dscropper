@@ -161,6 +161,7 @@ struct _GstDsCropper
   gint interval;
   gint operate_on_gie_id;
   std::vector<gboolean> *operate_on_class_ids;
+  gfloat scale_ratio;
 };
 
 typedef struct

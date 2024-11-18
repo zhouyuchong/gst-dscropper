@@ -55,7 +55,8 @@ enum
   PROP_OPERATE_ON_CLASS_IDS,
   PROP_NAME_FORMAT,
   PROP_OUTPUT_PATH,
-  PROP_INTERVAL
+  PROP_INTERVAL,
+  PROP_SCALE_RATIO
 };
 
 #define CHECK_NVDS_MEMORY_AND_GPUID(object, surface)  \
@@ -202,6 +203,15 @@ gst_dscropper_class_init (GstDsCropperClass * klass)
           GParamFlags
           (G_PARAM_READWRITE |
               G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_READY)));
+              
+  g_object_class_install_property (gobject_class, PROP_SCALE_RATIO,
+      g_param_spec_float ("scale-ratio",
+          "Crop Scale Ratio",
+          "Crop scale Ratio", 1.0,
+          G_MAXFLOAT, 1.0,
+          GParamFlags
+          (G_PARAM_READWRITE |
+              G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_READY)));
 
   g_object_class_install_property (gobject_class, PROP_OUTPUT_PATH,
       g_param_spec_string ("output-path", "Output Path",
@@ -277,6 +287,7 @@ gst_dscropper_init (GstDsCropper * dscropper)
   dscropper->output_path = g_strdup (DEFAULT_OUTPUT_PATH);
   dscropper->name_format = g_strdup (DEFAULT_NAME_FORMAT);
   dscropper->interval = DEFAULT_INTERVAL;
+  dscropper->scale_ratio = 1.0;
   /* This quark is required to identify NvDsMeta when iterating through
    * the buffer metadatas */
   if (!_dsmeta_quark)
@@ -302,6 +313,9 @@ gst_dscropper_set_property (GObject * object, guint prop_id,
       break;
     case PROP_OUTPUT_PATH:
       dscropper->output_path = g_value_dup_string (value);
+      break;
+    case PROP_SCALE_RATIO:
+      dscropper->scale_ratio = g_value_get_float (value);
       break;
 
     case PROP_OPERATE_ON_GIE_ID:
@@ -369,6 +383,10 @@ gst_dscropper_get_property (GObject * object, guint prop_id,
 
     case PROP_INTERVAL:
       g_value_set_int (value, dscropper->interval);
+      break;
+
+    case PROP_SCALE_RATIO:
+      g_value_set_float (value, dscropper->scale_ratio);
       break;
 
     case PROP_OUTPUT_PATH:
@@ -699,24 +717,17 @@ gst_dscropper_submit_input_buffer (GstBaseTransform * btrans,
       size_t frameSize = currentFrameParams->dataSize;
       uint frameWidth = currentFrameParams->width;
       uint frameHeight = currentFrameParams->height;
-      size_t pitch;
-      cudaMallocPitch(&rgb_frame_ptr, &pitch, framePitch * 3, frameHeight);
+      size_t pitch = 0;
+      uint channel = 3;
+      // set channle to 4 if colorformat is rgba like
+      if (colorFormat > 18 && colorFormat < 27) channel = 4;
 
-      ClippedSurfaceInfo* info = g_new(ClippedSurfaceInfo, 1);
-      memset(surface_name, 0, sizeof(surface_name));
-      std::string formattedString = formatString(dscropper->name_format, frame_meta->frame_num, obj_meta->object_id, obj_meta->class_id, obj_meta->confidence);
-      sprintf(surface_name, "%s/%s.png", dscropper->output_path, formattedString.c_str());  
-      info->filename = g_strdup(surface_name);
-      info->width = obj_meta->rect_params.width;
-      info->height = obj_meta->rect_params.height;
-      info->pitch = obj_meta->rect_params.width * 3;
-      if (colorFormat < 29 && colorFormat > 19) {
-        printf("no need to trans\n");
-        cudaMemcpy((void *)rgb_frame_ptr,
-                (void *)currentFrameParams->dataPtr,
-                frameSize,
-                cudaMemcpyDeviceToDevice);
-      } else {
+      printf("colorFormat: %d, pitch: %d, frame pitch: %d, channel: %d\n", colorFormat, pitch, framePitch, channel);
+
+      // cudaMalloc(&rgb_frame_ptr, frameSize);
+      if (colorFormat < 19 || colorFormat > 28) {
+        cudaMallocPitch(&rgb_frame_ptr, &pitch, framePitch * channel, frameHeight);
+        
         const Npp8u* y_plane;                // Pointer to the Y plane
         const Npp8u* uv_plane;               // Pointer to the UV plane
         y_plane = static_cast<const Npp8u*>(currentFrameParams->dataPtr);
@@ -733,24 +744,73 @@ gst_dscropper_submit_input_buffer (GstBaseTransform * btrans,
                           pitch,
                           NppiSize {static_cast<int>(frameWidth), static_cast<int>(frameHeight)});
         if (stat != NPP_SUCCESS) {
-          printf("nppiNV12ToRGB_8u_P2C3R failed with error %d", stat);
+          printf("nppiNV12ToRGB_8u_P2C3R failed with error %d\n", stat);
         }
+      } else {
+        CHECK_CUDA_STATUS (cudaMalloc(&rgb_frame_ptr, frameSize),
+                            "Could not allocate mem for RGB frame.");
+        cudaMemcpy((void *)rgb_frame_ptr,
+                (void *)currentFrameParams->dataPtr,
+                frameSize,
+                cudaMemcpyDeviceToDevice);
+      }
+      
+      
+
+      ClippedSurfaceInfo* info = g_new(ClippedSurfaceInfo, 1);
+      memset(surface_name, 0, sizeof(surface_name));
+      std::string formattedString = formatString(dscropper->name_format, frame_meta->frame_num, obj_meta->object_id, obj_meta->class_id, obj_meta->confidence);
+      sprintf(surface_name, "%s/%s.png", dscropper->output_path, formattedString.c_str());  
+      info->filename = g_strdup(surface_name);
+      // info->width = frameWidth;
+      // info->height = frameHeight;
+      // info->pitch = framePitch;
+
+      
+      int calculated_width = static_cast<int>(ceil(obj_meta->rect_params.width * dscropper->scale_ratio));
+      int calculated_height = static_cast<int>(ceil(obj_meta->rect_params.height * dscropper->scale_ratio));
+      int calculated_left = static_cast<int>(obj_meta->rect_params.left - (dscropper->scale_ratio - 1) * obj_meta->rect_params.width / 2);
+      int calculated_top = static_cast<int>(obj_meta->rect_params.top - (dscropper->scale_ratio - 1) * obj_meta->rect_params.height / 2);
+
+      // info->width = static_cast<int>(obj_meta->rect_params.width);
+      // info->height = obj_meta->rect_params.height;
+      // info->pitch = static_cast<int>(obj_meta->rect_params.width) * channel;
+      // info->channel = channel;
+      
+      info->width = calculated_width;
+      info->height = calculated_height;
+      info->pitch = calculated_width * channel;
+      info->channel = channel;
+      printf("%d, %d, %d, %d\n", info->width, info->height, info->pitch, channel);
+
+      // cudaMallocHost(&host_ptr, obj_meta->rect_params.width * obj_meta->rect_params.height * channel);
+      cudaMallocHost(&host_ptr, calculated_width * calculated_height * channel);
+
+      if (colorFormat > 18 && colorFormat < 27) {
+        stat = nppiResize_8u_C4R(static_cast<const Npp8u*>(rgb_frame_ptr), 
+                          pitch, 
+                          NppiSize {static_cast<int>(frameWidth), static_cast<int>(frameHeight)}, 
+                          NppiRect {calculated_left, calculated_top, calculated_width, calculated_height}, 
+                          static_cast<Npp8u*>(host_ptr), 
+                          calculated_width * channel, 
+                          NppiSize {calculated_width, calculated_height},
+                          NppiRect {0, 0, calculated_width, calculated_height},
+                          NPPI_INTER_LINEAR);
+      } else {
+        stat = nppiResize_8u_C3R(static_cast<const Npp8u*>(rgb_frame_ptr), 
+                          framePitch*3, 
+                          NppiSize {static_cast<int>(frameWidth), static_cast<int>(frameHeight)}, 
+                          NppiRect {calculated_left, calculated_top, calculated_width, calculated_height}, 
+                          static_cast<Npp8u*>(host_ptr), 
+                          calculated_width * channel, 
+                          NppiSize {calculated_width, calculated_height},
+                          NppiRect {0, 0, calculated_width, calculated_height},
+                          NPPI_INTER_LINEAR);
       }
 
-      cudaMallocHost(&host_ptr, obj_meta->rect_params.width * obj_meta->rect_params.height * 3);
-
-      stat = nppiResize_8u_C3R(static_cast<const Npp8u*>(rgb_frame_ptr), 
-                                pitch, 
-                                NppiSize {static_cast<int>(frameWidth), static_cast<int>(frameHeight)}, 
-                                NppiRect {static_cast<int>(obj_meta->rect_params.left), static_cast<int>(obj_meta->rect_params.top), static_cast<int>(obj_meta->rect_params.width), static_cast<int>(obj_meta->rect_params.height)}, 
-                                static_cast<Npp8u*>(host_ptr), 
-                                obj_meta->rect_params.width * 3, 
-                                NppiSize {static_cast<int>(obj_meta->rect_params.width), static_cast<int>(obj_meta->rect_params.height)},
-                                NppiRect {0, 0, static_cast<int>(obj_meta->rect_params.width), static_cast<int>(obj_meta->rect_params.height)},
-                                NPPI_INTER_LINEAR);
 
       if (stat != NPP_SUCCESS) {
-        printf("nppiResize_8u_C3R failed with error %d", stat);
+        printf("nppiResize_8u_C3R failed with error %d\n", stat);
       }
     
       g_mutex_lock (&dscropper->data_lock);
@@ -954,7 +1014,7 @@ gst_dscropper_data_loop (gpointer data)
     ClippedSurfaceInfo *info = (ClippedSurfaceInfo *) g_queue_pop_head (dscropper->data_queue);
     g_mutex_unlock (&dscropper->data_lock);
 
-    stbi_write_png(info->filename, info->width, info->height, 3, static_cast<unsigned char*>(host_ptr), info->pitch);
+    stbi_write_png(info->filename, info->width, info->height, info->channel, static_cast<unsigned char*>(host_ptr), info->pitch);
     
     // saveImageToRaw(image_name, host_ptr, tmp.dataSize, tmp.width, tmp.height, tmp.pitch);
 
