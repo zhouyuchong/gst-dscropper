@@ -445,6 +445,38 @@ gst_dscropper_start (GstBaseTransform * btrans)
   CHECK_CUDA_STATUS (cudaStreamCreate (&dscropper->cuda_stream),
       "Could not create cuda stream");
 
+  // if output path is empty, try to create it
+  struct stat st;
+  if (stat(dscropper->output_path, &st) == -1) {
+      if (errno == ENOENT) {
+          // 尝试创建路径
+          if (mkdir(dscropper->output_path, 0755) == -1) {
+              // 创建失败，可以记录日志或者设置错误状态
+              GST_ELEMENT_ERROR(dscropper, RESOURCE, OPEN_WRITE,
+                                ("Failed to create directory '%s': %s",
+                                  dscropper->output_path, g_strerror(errno)),
+                                ("Failed to create directory"));
+              return FALSE;
+          }
+      } else {
+          // 其他错误，可以记录日志或者设置错误状态
+          GST_ELEMENT_ERROR(dscropper, RESOURCE, OPEN_WRITE,
+                            ("Failed to access directory '%s': %s",
+                              dscropper->output_path, g_strerror(errno)),
+                            ("Failed to access directory"));
+          return FALSE;
+      }
+  } else if (!S_ISDIR(st.st_mode)) {
+      // 路径存在，但不是一个目录
+      GST_ELEMENT_ERROR(dscropper, RESOURCE, OPEN_WRITE,
+                        ("Path '%s' exists but is not a directory",
+                          dscropper->output_path),
+                        ("Path is not a directory"));
+      return FALSE;
+  }
+
+  
+
   /* Create process queue and cvmat queue to transfer data between threads.
    * We will be using this queue to maintain the list of frames/objects
    * currently given to the algorithm for processing. */
@@ -567,14 +599,14 @@ error:
   return FALSE;
 }
 
-std::string formatString(const char* input, int frame_num, int track_id, int class_id, float conf) {
+std::string formatString(const char* input, int source_id, int frame_num, int track_id, int class_id, float conf) {
     std::istringstream iss(input);
     std::string token;
     std::ostringstream oss; 
 
     while (getline(iss, token, ';')) {
         if (token == "frame") {
-            oss << "frm" << frame_num << "_";
+            oss << "src" << source_id << "_frm" << frame_num << "_";
         } else if (token == "trackid") {
             oss << "tid" << track_id << "_";
         } else if (token == "classid") {
@@ -779,7 +811,7 @@ gst_dscropper_submit_input_buffer (GstBaseTransform * btrans,
       
       ClippedSurfaceInfo* info = g_new(ClippedSurfaceInfo, 1);
       memset(surface_name, 0, sizeof(surface_name));
-      std::string formattedString = formatString(dscropper->name_format, frame_meta->frame_num, obj_meta->object_id, obj_meta->class_id, obj_meta->confidence);
+      std::string formattedString = formatString(dscropper->name_format, frame_meta->source_id, frame_meta->frame_num, obj_meta->object_id, obj_meta->class_id, obj_meta->confidence);
       sprintf(surface_name, "%s/%sobj.png", dscropper->output_path, formattedString.c_str());  
       info->filename = g_strdup(surface_name);
       info->width = calculated_width;

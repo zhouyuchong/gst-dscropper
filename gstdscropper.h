@@ -50,6 +50,8 @@
 #include <unordered_map>
 #include <list>
 #include <string>
+#include <errno.h>
+#include <sys/stat.h>
 
 /* Package and library details required for plugin_init */
 #define PACKAGE "dscropper"
@@ -162,6 +164,8 @@ struct _GstDsCropper
   gint operate_on_gie_id;
   std::vector<gboolean> *operate_on_class_ids;
   gfloat scale_ratio;
+  gint crop_mode;
+  
 };
 
 typedef struct
@@ -221,6 +225,7 @@ typedef struct
 {
   guint width;
   guint height;
+  guint channel;
   size_t pitch;
   size_t dataSize;
   NvBufSurfaceColorFormat colorFormat;
