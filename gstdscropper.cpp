@@ -37,7 +37,6 @@
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
-
 GST_DEBUG_CATEGORY_STATIC (gst_dscropper_debug);
 #define GST_CAT_DEFAULT gst_dscropper_debug
 #define USE_EGLIMAGE 1
@@ -763,19 +762,33 @@ gst_dscropper_submit_input_buffer (GstBaseTransform * btrans,
       NvBufSurfaceColorFormat colorFormat = currentFrameParams->colorFormat;
       size_t framePitch = currentFrameParams->pitch;
       size_t frameSize = currentFrameParams->dataSize;
-      uint frameWidth = currentFrameParams->width;
-      uint frameHeight = currentFrameParams->height;
-      size_t pitch = 0;
-      uint channel = 3;
-      // set channle to 4 if colorformat is rgba like
-      if (colorFormat > 18 && colorFormat < 27) channel = 4;
+      int frameWidth = currentFrameParams->width;
+      int frameHeight = currentFrameParams->height;
+      const int aDstOrder[3] = {0, 1, 2}; // RGB 3 channel
+
+      // printf("colorformat: %d\n", colorFormat);
+      // always convert to RGB 3 channel
+      CHECK_CUDA_STATUS (cudaMalloc(&frame_ptr_dev, frameWidth * frameHeight *3), "Could not allocate mem for RGB frame.");
       
       /*
       get Nvsurface and transform them into rgb format
-      for rgba, there should be 4 channel and dest-colorformat will be rgba too
       */
-      if (colorFormat < 19 || colorFormat > 28) {
-        CHECK_CUDA_STATUS (cudaMallocPitch(&frame_ptr_dev, &pitch, framePitch * channel, frameHeight), "Could not allocate mem for RGBA frame.");
+      if (colorFormat == NVBUF_COLOR_FORMAT_RGB || colorFormat == NVBUF_COLOR_FORMAT_BGR) {
+        stat = nppiSwapChannels_8u_C3R( static_cast<Npp8u*>(currentFrameParams->dataPtr), 
+                                            framePitch,
+                                            static_cast<Npp8u*>(frame_ptr_dev),
+                                            frameWidth*3,
+                                            NppiSize {frameWidth, frameHeight},
+                                            aDstOrder);
+
+      } else if (colorFormat > 18 && colorFormat < 27){
+        stat = nppiSwapChannels_8u_C4C3R( static_cast<Npp8u*>(currentFrameParams->dataPtr), 
+                                            framePitch,
+                                            static_cast<Npp8u*>(frame_ptr_dev),
+                                            frameWidth*3,
+                                            NppiSize {frameWidth, frameHeight},
+                                            aDstOrder);
+      } else {
         const Npp8u* y_plane;                // Pointer to the Y plane
         const Npp8u* uv_plane;               // Pointer to the UV plane
         y_plane = static_cast<const Npp8u*>(currentFrameParams->dataPtr);
@@ -783,31 +796,27 @@ gst_dscropper_submit_input_buffer (GstBaseTransform * btrans,
         const Npp8u* pSrc[2];
         pSrc[0] = y_plane;  // Y plane pointer
         pSrc[1] = uv_plane; // UV plane pointer
-        
-        // transform NV12 to RGB
         stat = nppiNV12ToRGB_8u_P2C3R(pSrc,
                           framePitch, 
                           static_cast<Npp8u*>(frame_ptr_dev), 
-                          pitch,
-                          NppiSize {static_cast<int>(frameWidth), static_cast<int>(frameHeight)});
-        if (stat != NPP_SUCCESS) {
-          printf("nppiNV12ToRGB_8u_P2C3R failed with error %d\n", stat);
-        }
-      } else {
-        CHECK_CUDA_STATUS (cudaMalloc(&frame_ptr_dev, frameSize),
-                            "Could not allocate mem for RGB frame.");
-        cudaMemcpy((void *)frame_ptr_dev,
-                (void *)currentFrameParams->dataPtr,
-                frameSize,
-                cudaMemcpyDeviceToDevice);
-        pitch = framePitch * channel;
-        // TODO assert frameSize equal to pitch * height
+                          frameWidth*3,
+                          NppiSize {frameWidth, frameHeight});
+      }
+      if (stat != NPP_SUCCESS) {
+        GST_WARNING_OBJECT(dscropper, "Failed convert surface colorformat, error code: %d", stat);
+        break;
       }
       
       int calculated_width = static_cast<int>(ceil(obj_meta->rect_params.width * dscropper->scale_ratio));
       int calculated_height = static_cast<int>(ceil(obj_meta->rect_params.height * dscropper->scale_ratio));
+      calculated_width = std::min(calculated_width, frameWidth);
+      calculated_height = std::min(calculated_height, frameHeight);
       int calculated_left = static_cast<int>(obj_meta->rect_params.left - (dscropper->scale_ratio - 1) * obj_meta->rect_params.width / 2);
       int calculated_top = static_cast<int>(obj_meta->rect_params.top - (dscropper->scale_ratio - 1) * obj_meta->rect_params.height / 2);
+      calculated_left = std::max(calculated_left, 0);
+      calculated_left = std::min(calculated_left, frameWidth - calculated_width);
+      calculated_top = std::max(calculated_top, 0);
+      calculated_top = std::min(calculated_top, frameHeight - calculated_height);
       
       ClippedSurfaceInfo* info = g_new(ClippedSurfaceInfo, 1);
       memset(surface_name, 0, sizeof(surface_name));
@@ -816,34 +825,23 @@ gst_dscropper_submit_input_buffer (GstBaseTransform * btrans,
       info->filename = g_strdup(surface_name);
       info->width = calculated_width;
       info->height = calculated_height;
-      info->pitch = calculated_width * channel;
-      info->channel = channel;
-      
-      CHECK_CUDA_STATUS(cudaMallocHost(&cropped_ptr_host, calculated_width * calculated_height * channel), "Could not allocate mem for host buffer.");
+      // printf("%d %d %d %d %d %d\n", frameWidth, frameHeight, calculated_left, calculated_top, calculated_width, calculated_height);
+      CHECK_CUDA_STATUS(cudaMallocHost(&cropped_ptr_host, calculated_width * calculated_height * 3), "Could not allocate mem for host buffer.");
 
-      if (colorFormat > 18 && colorFormat < 27) {
-        stat = nppiResize_8u_C4R(static_cast<const Npp8u*>(frame_ptr_dev), 
-                          pitch, 
-                          NppiSize {static_cast<int>(frameWidth), static_cast<int>(frameHeight)}, 
-                          NppiRect {calculated_left, calculated_top, calculated_width, calculated_height}, 
-                          static_cast<Npp8u*>(cropped_ptr_host), 
-                          calculated_width * channel, 
-                          NppiSize {calculated_width, calculated_height},
-                          NppiRect {0, 0, calculated_width, calculated_height},
-                          NPPI_INTER_LINEAR);
-      } else {
-        stat = nppiResize_8u_C3R(static_cast<const Npp8u*>(frame_ptr_dev), 
-                          pitch, 
-                          NppiSize {static_cast<int>(frameWidth), static_cast<int>(frameHeight)}, 
-                          NppiRect {calculated_left, calculated_top, calculated_width, calculated_height}, 
-                          static_cast<Npp8u*>(cropped_ptr_host), 
-                          calculated_width * channel, 
-                          NppiSize {calculated_width, calculated_height},
-                          NppiRect {0, 0, calculated_width, calculated_height},
-                          NPPI_INTER_LINEAR);
-      }
+
+      stat = nppiResize_8u_C3R(static_cast<const Npp8u*>(frame_ptr_dev), 
+                        frameWidth*3, 
+                        NppiSize {static_cast<int>(frameWidth), static_cast<int>(frameHeight)}, 
+                        NppiRect {calculated_left, calculated_top, calculated_width, calculated_height}, 
+                        static_cast<Npp8u*>(cropped_ptr_host), 
+                        calculated_width * 3, 
+                        NppiSize {calculated_width, calculated_height},
+                        NppiRect {0, 0, calculated_width, calculated_height},
+                        NPPI_INTER_LINEAR);
+      
       if (stat != NPP_SUCCESS) {
-        printf("nppiResize failed with error %d\n", stat);
+        GST_WARNING_OBJECT(dscropper, "nppiResize failed with error: %d", stat);
+        break;
       }
     
       g_mutex_lock (&dscropper->data_lock);
@@ -852,11 +850,11 @@ gst_dscropper_submit_input_buffer (GstBaseTransform * btrans,
       g_mutex_unlock (&dscropper->data_lock);
       
       if (dscropper->crop_mode) {
-        CHECK_CUDA_STATUS(cudaMallocHost(&frame_ptr_host, pitch * frameHeight), "Could not allocate mem for host frame buffer.");
+        CHECK_CUDA_STATUS(cudaMallocHost(&frame_ptr_host, frameWidth * frameHeight * 3), "Could not allocate mem for host frame buffer.");
         cudaMemcpy((void *)frame_ptr_host,
-        (void *)frame_ptr_dev,
-        pitch * frameHeight,
-        cudaMemcpyDeviceToHost);
+                    (void *)frame_ptr_dev,
+                    frameWidth * frameHeight * 3,
+                    cudaMemcpyDeviceToHost);
         ClippedSurfaceInfo* info_frame = g_new(ClippedSurfaceInfo, 1);
         memset(surface_name, 0, sizeof(surface_name));
         // std::string fs = formatString(dscropper->name_format, frame_meta->frame_num, obj_meta->object_id, obj_meta->class_id, obj_meta->confidence);
@@ -864,8 +862,6 @@ gst_dscropper_submit_input_buffer (GstBaseTransform * btrans,
         info_frame->filename = g_strdup(surface_name);
         info_frame->width = frameWidth;
         info_frame->height = frameHeight;
-        info_frame->pitch = pitch;
-        info_frame->channel = channel;
 
         g_mutex_lock (&dscropper->data_lock);
         g_queue_push_tail (dscropper->data_queue, frame_ptr_host);
@@ -1018,20 +1014,22 @@ gst_dscropper_output_loop (gpointer data)
   return nullptr;
 }
 
-
-void saveImageToRaw(const char* filename, void* data, size_t dataSize, int width, int height, int pitch) {
+void saveImageToFile(const char* filename, unsigned char* buffer, int width, int height, int pitch) {
     std::ofstream file(filename, std::ios::binary);
+
     if (!file) {
-        std::cerr << "Unable to open file for writing: " << filename << std::endl;
+        std::cerr << "无法打开文件进行写入: " << filename << std::endl;
         return;
     }
-    // Assuming the color format is one of the standard CUDA channel formats
-    // For simplicity, let's assume it's unsigned char and 4 channels (e.g., RGBA)
-    for (int y = 0; y < height; ++y) {
-        file.write(static_cast<const char*>(data) + y * pitch, width * 4); // Assuming 4 bytes per pixel (RGBA)
+
+    // 根据图片的实际行跨度来写入数据
+    for (int i = 0; i < height; ++i) {
+        file.write(reinterpret_cast<const char*>(buffer + i * pitch), width * 3); // 假设每个像素3个字节（例如RGB）
     }
+
     file.close();
 }
+
 
 static gpointer
 gst_dscropper_data_loop (gpointer data)
@@ -1045,6 +1043,8 @@ gst_dscropper_data_loop (gpointer data)
   auto duration = end_time - start_time;
   double duration_seconds;
   gpointer host_ptr = NULL;
+  cv::Mat raw_image;
+  // cv::Mat re_image;
 
   nvtxEventAttributes_t eventAttrib = {0};
   eventAttrib.version = NVTX_VERSION;
@@ -1069,8 +1069,14 @@ gst_dscropper_data_loop (gpointer data)
     host_ptr = g_queue_pop_head(dscropper->data_queue);
     ClippedSurfaceInfo *info = (ClippedSurfaceInfo *) g_queue_pop_head (dscropper->data_queue);
     g_mutex_unlock (&dscropper->data_lock);
-    stbi_write_png(info->filename, info->width, info->height, info->channel, static_cast<unsigned char*>(host_ptr), info->pitch);
-    // saveImageToRaw(image_name, host_ptr, tmp.dataSize, tmp.width, tmp.height, tmp.pitch);
+    // since opencv has opposite channel order to nvdia, need to trans
+    raw_image = cv::Mat(info->height, info->width, CV_8UC3, static_cast<unsigned char*>(host_ptr), info->width * 3);
+    // cv::cvtColor(raw_image, re_image, CV_RGB2BGR);
+    cv::imwrite(info->filename, raw_image); 
+    
+  
+    // stbi_write_png(info->filename, info->width, info->height, 3, static_cast<unsigned char*>(host_ptr), info->width * 3);
+    // saveImageToFile(info->filename, static_cast<unsigned char*>(host_ptr), info->width, info->height, info->width * 3);
 
     if (host_ptr){
       cudaFreeHost(host_ptr);

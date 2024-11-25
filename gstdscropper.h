@@ -52,6 +52,8 @@
 #include <string>
 #include <errno.h>
 #include <sys/stat.h>
+#include <opencv2/opencv.hpp>
+#include <opencv2/imgproc/types_c.h>
 
 /* Package and library details required for plugin_init */
 #define PACKAGE "dscropper"
@@ -225,10 +227,6 @@ typedef struct
 {
   guint width;
   guint height;
-  guint channel;
-  size_t pitch;
-  size_t dataSize;
-  NvBufSurfaceColorFormat colorFormat;
   gchar *filename;
 } ClippedSurfaceInfo;
 
