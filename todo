@@ -1,1 +1,2 @@
-分析循环外申请空间的耗时还是在确定满足条件后再申请空间
+remove unrelated properties
+add fdfs set up config
