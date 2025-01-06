@@ -54,6 +54,11 @@
 #include <sys/stat.h>
 #include <opencv2/opencv.hpp>
 #include <opencv2/imgproc/types_c.h>
+// #include "fdfs_client.h"
+// #include "fdfs_global.h"
+#include "cfdfs_client.h"
+
+
 
 /* Package and library details required for plugin_init */
 #define PACKAGE "dscropper"
@@ -102,10 +107,14 @@ struct _GstDsCropper
 
   GMutex data_lock;
 
+  GMutex fdfs_lock;
+
   /** Queue to send data to output thread for processing**/
   GQueue *process_queue;
 
   GQueue *data_queue;
+
+  GQueue *fdfs_queue;
 
   std::unordered_map<guint64, CropperObjectInfo> *object_infos;
   std::list<guint64> *insertion_order;
@@ -167,6 +176,8 @@ struct _GstDsCropper
   std::vector<gboolean> *operate_on_class_ids;
   gfloat scale_ratio;
   gint crop_mode;
+
+  CFDFSClient fdfs_client;
   
 };
 
@@ -227,7 +238,11 @@ typedef struct
 {
   guint width;
   guint height;
-  gchar *filename;
+  // gchar *filename;
+  guint track_id;
+  guint frame_num;
+  // image type 0: object, 1: frame
+  guint image_type;
 } ClippedSurfaceInfo;
 
 /** Boiler plate stuff */
