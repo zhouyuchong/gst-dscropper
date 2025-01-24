@@ -170,12 +170,15 @@ struct _GstDsCropper
   nvtxDomainHandle_t nvtx_domain;
 
   gchar *output_path;
-  gchar *name_format;
+  gchar *fdfs_cfg_path;
+  // gchar *name_format;
   gint interval;
   gint operate_on_gie_id;
   std::vector<gboolean> *operate_on_class_ids;
   gfloat scale_ratio;
   gint crop_mode;
+
+  gint save_mode;
 
   CFDFSClient fdfs_client;
   
@@ -241,6 +244,7 @@ typedef struct
   // gchar *filename;
   guint track_id;
   guint frame_num;
+  unsigned int source_id;
   // image type 0: object, 1: frame
   guint image_type;
 } ClippedSurfaceInfo;

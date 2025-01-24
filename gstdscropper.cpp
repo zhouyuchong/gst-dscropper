@@ -52,7 +52,7 @@ enum
   PROP_GPU_DEVICE_ID,
   PROP_OPERATE_ON_GIE_ID,
   PROP_OPERATE_ON_CLASS_IDS,
-  PROP_NAME_FORMAT,
+  PROP_FDFS_CONFIG_PATH,
   PROP_OUTPUT_PATH,
   PROP_INTERVAL,
   PROP_SCALE_RATIO,
@@ -96,10 +96,9 @@ enum
 
 #define MAX_QUEUE_SIZE 20
 #define MAX_OBJ_INFO_SIZE 50
-#define CFDFS_CONFIG_PATH  "/opt/nvidia/deepstream/deepstream-6.3/sources/video_analysis_platform/gst-dscropper/client.conf.sample"
+#define DEFAULT_FDFS_CONFIG_PATH  "/opt/nvidia/deepstream/deepstream-6.3/sources/video_analysis_platform/gst-dscropper/client.conf.sample"
 #define LOG_LEVEL_DEBUG 6
 
-// #define NVDS_USER_FRAME_META_EXAMPLE (nvds_get_user_meta_type("fdfs"))
 #define NVDS_USER_FRAME_META_EXAMPLE (nvds_get_user_meta_type("NVIDIA.NVINFER.USER_META"))
 // #define NVDS_USER_FRAME_META_EXAMPLE NVDS_USER_META
 #define USER_ARRAY_SIZE 100
@@ -238,14 +237,21 @@ gst_dscropper_class_init (GstDsCropperClass * klass)
           DEFAULT_OUTPUT_PATH,
           (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
               GST_PARAM_MUTABLE_PLAYING)));
-              
-  g_object_class_install_property (gobject_class, PROP_NAME_FORMAT,
-      g_param_spec_string ("name-format", "File Name Format",
-          "Format of the output file name.\n"
-          "\t\t\t frameidx_trackid_classid_conf.",
-          DEFAULT_NAME_FORMAT,
+
+  g_object_class_install_property (gobject_class, PROP_FDFS_CONFIG_PATH,
+      g_param_spec_string ("fdfs-conf-path", "FDFS config file path",
+          "Path for fdfs client config file",
+          DEFAULT_FDFS_CONFIG_PATH,
           (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
               GST_PARAM_MUTABLE_PLAYING)));
+              
+  // g_object_class_install_property (gobject_class, PROP_NAME_FORMAT,
+  //     g_param_spec_string ("name-format", "File Name Format",
+  //         "Format of the output file name.\n"
+  //         "\t\t\t frameidx_trackid_classid_conf.",
+  //         DEFAULT_NAME_FORMAT,
+  //         (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+  //             GST_PARAM_MUTABLE_PLAYING)));
 
 
   g_object_class_install_property (gobject_class, PROP_OPERATE_ON_GIE_ID,
@@ -304,7 +310,7 @@ gst_dscropper_init (GstDsCropper * dscropper)
   dscropper->operate_on_gie_id = DEFAULT_OPERATE_ON_GIE_ID;
   dscropper->operate_on_class_ids = new std::vector < gboolean >;
   dscropper->output_path = g_strdup (DEFAULT_OUTPUT_PATH);
-  dscropper->name_format = g_strdup (DEFAULT_NAME_FORMAT);
+  dscropper->fdfs_cfg_path = g_strdup (DEFAULT_FDFS_CONFIG_PATH);
   dscropper->interval = DEFAULT_INTERVAL;
   dscropper->scale_ratio = DEFAULT_SCALE_RATIO;
   dscropper->crop_mode = DEFAULT_CROP_MODE;
@@ -327,9 +333,8 @@ gst_dscropper_set_property (GObject * object, guint prop_id,
       break;
     case PROP_GPU_DEVICE_ID:
       dscropper->gpu_id = g_value_get_uint (value);
-      break;
-    case PROP_NAME_FORMAT:
-      dscropper->name_format = g_value_dup_string (value);
+    case PROP_FDFS_CONFIG_PATH:
+      dscropper->fdfs_cfg_path = g_value_dup_string (value);
       break;
     case PROP_OUTPUT_PATH:
       dscropper->output_path = g_value_dup_string (value);
@@ -402,7 +407,6 @@ gst_dscropper_get_property (GObject * object, guint prop_id,
       g_value_set_string (value, str.str ().c_str ());
     }
       break;
-
     case PROP_INTERVAL:
       g_value_set_int (value, dscropper->interval);
       break;
@@ -412,13 +416,11 @@ gst_dscropper_get_property (GObject * object, guint prop_id,
     case PROP_SCALE_RATIO:
       g_value_set_float (value, dscropper->scale_ratio);
       break;
-
     case PROP_OUTPUT_PATH:
       dscropper->output_path = g_value_dup_string (value);
       break;
-
-    case PROP_NAME_FORMAT:
-      dscropper->name_format = g_value_dup_string (value);
+    case PROP_FDFS_CONFIG_PATH:
+      dscropper->fdfs_cfg_path = g_value_dup_string (value);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -482,7 +484,20 @@ gst_dscropper_start (GstBaseTransform * btrans)
       return FALSE;
   }
 
-  
+  if (stat(dscropper->fdfs_cfg_path, &st) == 0) {
+        if (!S_ISREG(st.st_mode)){
+              GST_ELEMENT_ERROR(dscropper, RESOURCE, OPEN_WRITE,
+                        ("Path '%s' is not a file.",
+                          dscropper->fdfs_cfg_path),
+                        ("Path format error"));
+        }
+  } else {
+    GST_ELEMENT_ERROR(dscropper, RESOURCE, OPEN_WRITE,
+                        ("Path '%s' doesn't exist",
+                          dscropper->fdfs_cfg_path),
+                        ("Path doesn't exist"));
+    return FALSE;
+  }
 
   /* Create process queue and cvmat queue to transfer data between threads.
    * We will be using this queue to maintain the list of frames/objects
@@ -493,9 +508,8 @@ gst_dscropper_start (GstBaseTransform * btrans)
   dscropper->object_infos = new std::unordered_map<guint64, CropperObjectInfo>();
   dscropper->insertion_order = new std::list<guint64>();
 
-  dscropper->fdfs_client.init(CFDFS_CONFIG_PATH, LOG_LEVEL_DEBUG);
+  dscropper->fdfs_client.init(dscropper->fdfs_cfg_path, LOG_LEVEL_DEBUG);
   dscropper->fdfs_queue = g_queue_new ();
-  // init(CFDFS_CONFIG_PATH, LOG_LEVEL_DEBUG);
 
   /* Start a thread which will pop output from the algorithm, form NvDsMeta and
    * push buffers to the next element. */
@@ -610,35 +624,6 @@ gst_dscropper_set_caps (GstBaseTransform * btrans, GstCaps * incaps,
 
 error:
   return FALSE;
-}
-
-std::string formatString(const char* input, int source_id, int frame_num, int track_id, int class_id, float conf) {
-    std::istringstream iss(input);
-    std::string token;
-    std::ostringstream oss; 
-
-    while (getline(iss, token, ';')) {
-        if (token == "frame") {
-            oss << "src" << source_id << "_frm" << frame_num << "_";
-        } else if (token == "trackid") {
-            oss << "tid" << track_id << "_";
-        } else if (token == "classid") {
-            oss << "cls" << class_id << "_";
-        } else if (token == "conf") {
-            oss << "conf" << (int)(conf*100) << "_";
-        } else {
-            std::cerr << "Unknown category: " << token << std::endl;
-        }
-    }
-
-    std::string result = oss.str();
-    // 移除末尾的逗号和空格
-    if (!result.empty() && result.back() == ' ') {
-        result.pop_back();
-        result.pop_back();
-    }
-
-    return result;
 }
 
 static inline gboolean
@@ -770,6 +755,7 @@ gst_dscropper_submit_input_buffer (GstBaseTransform * btrans,
     void *frame_ptr_host = NULL;
     void *cropped_ptr_host = NULL;
 
+    // if there is data in fdfs_queue, we pop it and add it into user_metadata
     while (!g_queue_is_empty (dscropper->fdfs_queue))
     {
       gchar *formatted_string = (gchar*)g_queue_pop_head (dscropper->fdfs_queue);
@@ -786,14 +772,7 @@ gst_dscropper_submit_input_buffer (GstBaseTransform * btrans,
 
       g_free (formatted_string);
     }
-    
-
-    // for (l_user_meta = frame_meta->frame_user_meta_list; l_user_meta != NULL;
-    //     l_user_meta = l_user_meta->next) {
-    //       user_meta = (NvDsUserMeta *) (l_user_meta->data);
-    //       printf("user meta type: %d\n", user_meta->base_meta.meta_type);
-    //     }
-      
+          
     for (l_obj = frame_meta->obj_meta_list; l_obj != NULL;
         l_obj = l_obj->next) {
       obj_meta = (NvDsObjectMeta *) (l_obj->data);
@@ -804,6 +783,7 @@ gst_dscropper_submit_input_buffer (GstBaseTransform * btrans,
         continue;
       }
 
+      // only crop objects that meet the condition
       auto it = dscropper->object_infos->find(obj_meta->object_id);
       if (it != dscropper->object_infos->end()) {
           it->second.counter += 1;
@@ -893,16 +873,14 @@ gst_dscropper_submit_input_buffer (GstBaseTransform * btrans,
       calculated_top = std::min(calculated_top, frameHeight - calculated_height);
       
       ClippedSurfaceInfo* info = g_new(ClippedSurfaceInfo, 1);
-      // memset(surface_name, 0, sizeof(surface_name));
-      // std::string formattedString = formatString(dscropper->name_format, frame_meta->source_id, frame_meta->frame_num, obj_meta->object_id, obj_meta->class_id, obj_meta->confidence);
-      // sprintf(surface_name, "%s/%sobj.png", dscropper->output_path, formattedString.c_str());  
-      // info->filename = g_strdup(surface_name);
+
       info->frame_num = frame_meta->frame_num;
       info->track_id = obj_meta->object_id;
       info->width = calculated_width;
       info->height = calculated_height;
       info->image_type = 0;
-      // printf("%d %d %d %d %d %d\n", frameWidth, frameHeight, calculated_left, calculated_top, calculated_width, calculated_height);
+      info->source_id = frame_meta->source_id;
+
       CHECK_CUDA_STATUS(cudaMallocHost(&cropped_ptr_host, calculated_width * calculated_height * 3), "Could not allocate mem for host buffer.");
 
 
@@ -933,23 +911,21 @@ gst_dscropper_submit_input_buffer (GstBaseTransform * btrans,
                     frameWidth * frameHeight * 3,
                     cudaMemcpyDeviceToHost);
         ClippedSurfaceInfo* info_frame = g_new(ClippedSurfaceInfo, 1);
-        // memset(surface_name, 0, sizeof(surface_name));
-        // std::string fs = formatString(dscropper->name_format, frame_meta->frame_num, obj_meta->object_id, obj_meta->class_id, obj_meta->confidence);
-        // sprintf(surface_name, "%s/%sfrm.png", dscropper->output_path, formattedString.c_str());  
-        // info_frame->filename = g_strdup(surface_name);
+
         info_frame->frame_num = frame_meta->frame_num;
         info_frame->track_id = obj_meta->object_id;
         info_frame->image_type = 1;
         info_frame->width = frameWidth;
         info_frame->height = frameHeight;
+        info_frame->source_id = frame_meta->source_id;
 
         g_mutex_lock (&dscropper->data_lock);
         g_queue_push_tail (dscropper->data_queue, frame_ptr_host);
         g_queue_push_tail (dscropper->data_queue, info_frame);
         g_mutex_unlock (&dscropper->data_lock);
+
         
       }
-      // break;
     }
     cudaFree(frame_ptr_dev);
   }
@@ -1145,11 +1121,12 @@ gst_dscropper_data_loop (gpointer data)
       continue;
     }
     
-    g_mutex_lock (&dscropper->data_lock);
-    
+    g_mutex_lock (&dscropper->data_lock);    
     host_ptr = g_queue_pop_head(dscropper->data_queue);
     ClippedSurfaceInfo *info = (ClippedSurfaceInfo *) g_queue_pop_head (dscropper->data_queue);
     g_mutex_unlock (&dscropper->data_lock);
+
+
     // since opencv has opposite channel order to nvdia, need to trans
     // raw_image = cv::Mat(info->height, info->width, CV_8UC3, static_cast<unsigned char*>(host_ptr), info->width * 3);
     // cv::cvtColor(raw_image, re_image, CV_RGB2BGR);
@@ -1157,22 +1134,23 @@ gst_dscropper_data_loop (gpointer data)
 
     raw_image = cv::Mat(info->height, info->width, CV_8UC3, static_cast<unsigned char*>(host_ptr), info->width * 3);
 
-    // // 将图像转换为RGB格式（如果需要）
     cv::Mat rgb_image;
     cv::cvtColor(raw_image, rgb_image, cv::COLOR_BGR2RGB);
+
+    if (dscropper->output_path) {
+      gchar *result_image_name = g_strdup_printf ("%s/s%d_f%d_o%d_%d.png", dscropper->output_path, info->source_id, info->frame_num, info->track_id, info->image_type);
+      cv::imwrite(result_image_name, rgb_image); 
+    }
 
     std::vector<uchar> buf;
     cv::imencode(".png", rgb_image, buf); // 假设图像格式为JPEG，可以根据需要更改
 
-    // // 调用FastDFS上传函数
     int name_size;
     char *remote_file_name = nullptr;
     int result = dscropper->fdfs_client.fdfs_uploadfile((const char*)buf.data(), ".png", buf.size(), name_size, remote_file_name);
 
-    // // printf("FastDFS upload result: %d\n", result);
-    // std::cout << "remote file name: " << remote_file_name << std::endl;
-    gchar *formatted_string = g_strdup_printf ("%d|%d|%d|%s", info->frame_num, info->track_id, info->image_type, remote_file_name);
-    std::cout<<formatted_string<<std::endl;
+    gchar *formatted_string = g_strdup_printf ("%u|%d|%d|%d|%s", info->source_id, info->frame_num, info->track_id, info->image_type, remote_file_name);
+    // std::cout<<formatted_string<<" "<<dscropper->output_path<<std::endl;
     g_mutex_lock (&dscropper->fdfs_lock);
     g_queue_push_tail (dscropper->fdfs_queue, formatted_string);
     g_mutex_unlock (&dscropper->fdfs_lock);
