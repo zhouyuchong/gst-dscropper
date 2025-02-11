@@ -3,7 +3,7 @@
  * @Date: 2024-10-24 16:58:01
  * @Description: 
  * @LastEditors: zhouyuchong
- * @LastEditTime: 2025-02-11 14:55:41
+ * @LastEditTime: 2025-02-11 14:59:33
 -->
 # gst-dscropper
 
@@ -33,6 +33,10 @@ for more details, run `gst-inspect-1.0 dscropper`
 + install fastdfs, [tutorial](https://blog.csdn.net/qq_41453285/article/details/107158911)
 + export CUDA_VER=?
 + make install
+
+## Known Issues
+1. error when set state to NULL while data not all processed. Should wait until then.
+2. hang up when set state to NULL and then set state to PLAYING. Temp solution: re-init a new dscropper object.
 
 ## Reference
 + gst-dsexample
