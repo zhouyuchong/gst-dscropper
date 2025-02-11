@@ -216,7 +216,7 @@ gst_dscropper_class_init (GstDsCropperClass * klass)
   g_object_class_install_property (gobject_class, PROP_CROP_MODE,
       g_param_spec_uint ("crop-mode",
           "crop mode",
-          "Set crop mode, 0 defalt only crop object, 1 crop both object and original frame", 0,
+          "Set crop mode, 0 defalt only crop object, 1 only save frame, 2 crop both object and original frame", 0,
           G_MAXUINT, 0,
           GParamFlags
           (G_PARAM_READWRITE |
@@ -508,7 +508,9 @@ gst_dscropper_start (GstBaseTransform * btrans)
   dscropper->object_infos = new std::unordered_map<guint64, CropperObjectInfo>();
   dscropper->insertion_order = new std::list<guint64>();
 
-  dscropper->fdfs_client.init(dscropper->fdfs_cfg_path, LOG_LEVEL_DEBUG);
+  // dscropper->fdfs_client.init(dscropper->fdfs_cfg_path, LOG_LEVEL_DEBUG);
+  dscropper->fdfs_client = new CFDFSClient();
+  dscropper->fdfs_client->init(dscropper->fdfs_cfg_path, LOG_LEVEL_DEBUG);
   dscropper->fdfs_queue = g_queue_new ();
 
   /* Start a thread which will pop output from the algorithm, form NvDsMeta and
@@ -544,6 +546,20 @@ gst_dscropper_stop (GstBaseTransform * btrans)
 #else
   NvBufSurface * inter_buf;
 #endif
+
+  // if (dscropper->operate_on_class_ids != nullptr) {
+  //   delete[] dscropper->operate_on_class_ids;
+  //   dscropper->operate_on_class_ids = nullptr;
+  // }
+
+  if (dscropper->fdfs_client) {
+    delete dscropper->fdfs_client;
+    dscropper->fdfs_client = NULL;
+  }
+
+  gpointer data;
+  while ((data = g_queue_pop_head(dscropper->fdfs_queue)) != NULL) {
+  }
 
   g_mutex_lock (&dscropper->process_lock);
 
@@ -860,51 +876,58 @@ gst_dscropper_submit_input_buffer (GstBaseTransform * btrans,
         GST_WARNING_OBJECT(dscropper, "Failed convert surface colorformat, error code: %d", stat);
         break;
       }
+
+      if (dscropper->crop_mode == 0 || dscropper->crop_mode == 2) {
+        int calculated_width = static_cast<int>(ceil(obj_meta->rect_params.width * dscropper->scale_ratio));
+        int calculated_height = static_cast<int>(ceil(obj_meta->rect_params.height * dscropper->scale_ratio));
+        calculated_width = std::min(calculated_width, frameWidth);
+        calculated_height = std::min(calculated_height, frameHeight);
+        int calculated_left = static_cast<int>(obj_meta->rect_params.left - (dscropper->scale_ratio - 1) * obj_meta->rect_params.width / 2);
+        int calculated_top = static_cast<int>(obj_meta->rect_params.top - (dscropper->scale_ratio - 1) * obj_meta->rect_params.height / 2);
+        calculated_left = std::max(calculated_left, 0);
+        calculated_left = std::min(calculated_left, frameWidth - calculated_width);
+        calculated_top = std::max(calculated_top, 0);
+        calculated_top = std::min(calculated_top, frameHeight - calculated_height);
+        
+        ClippedSurfaceInfo* info = g_new(ClippedSurfaceInfo, 1);
+
+        info->frame_num = frame_meta->frame_num;
+        info->track_id = obj_meta->object_id;
+        info->width = calculated_width;
+        info->height = calculated_height;
+        info->image_type = 0;
+        info->source_id = frame_meta->source_id;
+        info->x1 = 0;
+        info->y1 = 0;
+        info->x2 = 0;
+        info->y2 = 0;
+        info->conf = 0.0;
+
+        CHECK_CUDA_STATUS(cudaMallocHost(&cropped_ptr_host, calculated_width * calculated_height * 3), "Could not allocate mem for host buffer.");
+
+
+        stat = nppiResize_8u_C3R(static_cast<const Npp8u*>(frame_ptr_dev), 
+                          frameWidth*3, 
+                          NppiSize {static_cast<int>(frameWidth), static_cast<int>(frameHeight)}, 
+                          NppiRect {calculated_left, calculated_top, calculated_width, calculated_height}, 
+                          static_cast<Npp8u*>(cropped_ptr_host), 
+                          calculated_width * 3, 
+                          NppiSize {calculated_width, calculated_height},
+                          NppiRect {0, 0, calculated_width, calculated_height},
+                          NPPI_INTER_LINEAR);
+        
+        if (stat != NPP_SUCCESS) {
+          GST_WARNING_OBJECT(dscropper, "nppiResize failed with error: %d", stat);
+          break;
+        }
       
-      int calculated_width = static_cast<int>(ceil(obj_meta->rect_params.width * dscropper->scale_ratio));
-      int calculated_height = static_cast<int>(ceil(obj_meta->rect_params.height * dscropper->scale_ratio));
-      calculated_width = std::min(calculated_width, frameWidth);
-      calculated_height = std::min(calculated_height, frameHeight);
-      int calculated_left = static_cast<int>(obj_meta->rect_params.left - (dscropper->scale_ratio - 1) * obj_meta->rect_params.width / 2);
-      int calculated_top = static_cast<int>(obj_meta->rect_params.top - (dscropper->scale_ratio - 1) * obj_meta->rect_params.height / 2);
-      calculated_left = std::max(calculated_left, 0);
-      calculated_left = std::min(calculated_left, frameWidth - calculated_width);
-      calculated_top = std::max(calculated_top, 0);
-      calculated_top = std::min(calculated_top, frameHeight - calculated_height);
-      
-      ClippedSurfaceInfo* info = g_new(ClippedSurfaceInfo, 1);
-
-      info->frame_num = frame_meta->frame_num;
-      info->track_id = obj_meta->object_id;
-      info->width = calculated_width;
-      info->height = calculated_height;
-      info->image_type = 0;
-      info->source_id = frame_meta->source_id;
-
-      CHECK_CUDA_STATUS(cudaMallocHost(&cropped_ptr_host, calculated_width * calculated_height * 3), "Could not allocate mem for host buffer.");
-
-
-      stat = nppiResize_8u_C3R(static_cast<const Npp8u*>(frame_ptr_dev), 
-                        frameWidth*3, 
-                        NppiSize {static_cast<int>(frameWidth), static_cast<int>(frameHeight)}, 
-                        NppiRect {calculated_left, calculated_top, calculated_width, calculated_height}, 
-                        static_cast<Npp8u*>(cropped_ptr_host), 
-                        calculated_width * 3, 
-                        NppiSize {calculated_width, calculated_height},
-                        NppiRect {0, 0, calculated_width, calculated_height},
-                        NPPI_INTER_LINEAR);
-      
-      if (stat != NPP_SUCCESS) {
-        GST_WARNING_OBJECT(dscropper, "nppiResize failed with error: %d", stat);
-        break;
+        g_mutex_lock (&dscropper->data_lock);
+        g_queue_push_tail (dscropper->data_queue, cropped_ptr_host);
+        g_queue_push_tail (dscropper->data_queue, info);
+        g_mutex_unlock (&dscropper->data_lock);
       }
-    
-      g_mutex_lock (&dscropper->data_lock);
-      g_queue_push_tail (dscropper->data_queue, cropped_ptr_host);
-      g_queue_push_tail (dscropper->data_queue, info);
-      g_mutex_unlock (&dscropper->data_lock);
       
-      if (dscropper->crop_mode) {
+      if (dscropper->crop_mode == 1 || dscropper->crop_mode == 2) {
         CHECK_CUDA_STATUS(cudaMallocHost(&frame_ptr_host, frameWidth * frameHeight * 3), "Could not allocate mem for host frame buffer.");
         cudaMemcpy((void *)frame_ptr_host,
                     (void *)frame_ptr_dev,
@@ -918,13 +941,16 @@ gst_dscropper_submit_input_buffer (GstBaseTransform * btrans,
         info_frame->width = frameWidth;
         info_frame->height = frameHeight;
         info_frame->source_id = frame_meta->source_id;
+        info_frame->x1 = static_cast<int>(obj_meta->rect_params.left);
+        info_frame->y1 = static_cast<int>(obj_meta->rect_params.top);
+        info_frame->x2 = static_cast<int>(obj_meta->rect_params.left + obj_meta->rect_params.width);
+        info_frame->y2 = static_cast<int>(obj_meta->rect_params.top + obj_meta->rect_params.height);
+        info_frame->conf = obj_meta->confidence;
 
         g_mutex_lock (&dscropper->data_lock);
         g_queue_push_tail (dscropper->data_queue, frame_ptr_host);
         g_queue_push_tail (dscropper->data_queue, info_frame);
         g_mutex_unlock (&dscropper->data_lock);
-
-        
       }
     }
     cudaFree(frame_ptr_dev);
@@ -1137,17 +1163,38 @@ gst_dscropper_data_loop (gpointer data)
     cv::Mat rgb_image;
     cv::cvtColor(raw_image, rgb_image, cv::COLOR_BGR2RGB);
 
-    if (dscropper->output_path) {
-      gchar *result_image_name = g_strdup_printf ("%s/s%d_f%d_o%d_%d.png", dscropper->output_path, info->source_id, info->frame_num, info->track_id, info->image_type);
-      cv::imwrite(result_image_name, rgb_image); 
+    if (info->image_type == 1) {
+      cv::Point pt1(info->x1, info->y1);
+      cv::Point pt2(info->x2, info->y2);
+      double fontScale = (info->x2 - info->x1) / 150.0;
+      int thickness = 1; // 字体线条的粗细
+      cv::Point org(info->x1, info->y1); // 文字的起始位置（右下角）
+
+      // 定义字体
+      std::ostringstream oss;
+      oss << std::fixed << std::setprecision(2) << info->conf;
+      std::string str = oss.str();
+      cv::String text = str;
+      cv::Scalar fontColor = cv::Scalar(0, 0, 255); // 白色文字
+      int fontFace = cv::FONT_HERSHEY_SIMPLEX;
+
+    // 在图像上绘制文字
+      cv::putText(rgb_image, text, org, fontFace, fontScale, fontColor, thickness, cv::LINE_AA);
+      cv::Scalar color(255, 0, 0);
+      cv::rectangle(rgb_image, pt1, pt2, color, 2);
     }
+
+    // if (dscropper->output_path) {
+    //   gchar *result_image_name = g_strdup_printf ("%s/s%d_f%d_o%d_%d.png", dscropper->output_path, info->source_id, info->frame_num, info->track_id, info->image_type);
+    //   cv::imwrite(result_image_name, rgb_image); 
+    // }
 
     std::vector<uchar> buf;
     cv::imencode(".png", rgb_image, buf); // 假设图像格式为JPEG，可以根据需要更改
 
     int name_size;
     char *remote_file_name = nullptr;
-    int result = dscropper->fdfs_client.fdfs_uploadfile((const char*)buf.data(), ".png", buf.size(), name_size, remote_file_name);
+    int result = dscropper->fdfs_client->fdfs_uploadfile((const char*)buf.data(), ".png", buf.size(), name_size, remote_file_name);
 
     gchar *formatted_string = g_strdup_printf ("%u|%d|%d|%d|%s", info->source_id, info->frame_num, info->track_id, info->image_type, remote_file_name);
     // std::cout<<formatted_string<<" "<<dscropper->output_path<<std::endl;

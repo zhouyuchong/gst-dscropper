@@ -3,7 +3,7 @@
  * @Date: 2024-10-24 16:58:01
  * @Description: 
  * @LastEditors: zhouyuchong
- * @LastEditTime: 2024-10-29 10:51:14
+ * @LastEditTime: 2025-02-11 14:55:41
 -->
 # gst-dscropper
 
@@ -11,7 +11,6 @@ crop & save images base on model outputs.
 
 ## feature
 + Non-block data thread
-+ opencv free
 
 ## property
 ### interval(int)
@@ -29,6 +28,11 @@ output file name: `tida_frmb_confc.png`
 
 
 for more details, run `gst-inspect-1.0 dscropper`
+
+## Usage
++ install fastdfs, [tutorial](https://blog.csdn.net/qq_41453285/article/details/107158911)
++ export CUDA_VER=?
++ make install
 
 ## Reference
 + gst-dsexample

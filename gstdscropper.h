@@ -180,7 +180,7 @@ struct _GstDsCropper
 
   gint save_mode;
 
-  CFDFSClient fdfs_client;
+  CFDFSClient *fdfs_client;
   
 };
 
@@ -239,9 +239,13 @@ typedef struct
 
 typedef struct
 {
+  int x1;
+  int y1;
+  int x2;
+  int y2;
+  float conf;
   guint width;
   guint height;
-  // gchar *filename;
   guint track_id;
   guint frame_num;
   unsigned int source_id;
