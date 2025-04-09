@@ -51,7 +51,7 @@ LIBS := -shared -Wl,-no-undefined \
 
 OBJS:= $(SRCS:.cpp=.o)
 
-PKGS:= gstreamer-1.0 gstreamer-base-1.0 gstreamer-video-1.0
+PKGS:= gstreamer-1.0 gstreamer-base-1.0 gstreamer-video-1.0 /usr/lib/x86_64-linux-gnu/pkgconfig/opencv4.pc
 
 
 CFLAGS+=$(shell pkg-config --cflags $(PKGS))

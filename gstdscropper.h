@@ -163,10 +163,12 @@ struct _GstDsCropper
   gchar *output_path;
   gchar *name_format;
   gint interval;
-  gint operate_on_gie_id;
+  guint operate_on_gie_id;
   std::vector<gboolean> *operate_on_class_ids;
   gfloat scale_ratio;
-  gint crop_mode;
+  guint save_object;
+  guint save_frame;
+  guint draw_info;
   
 };
 
@@ -227,8 +229,9 @@ typedef struct
 {
   guint width;
   guint height;
-  gchar *filename;
-} ClippedSurfaceInfo;
+  gchar *target_path;
+  void *image_ptr_host;
+} ImageBuffer;
 
 /** Boiler plate stuff */
 struct _GstDsCropperClass

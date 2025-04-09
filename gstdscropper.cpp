@@ -35,8 +35,6 @@
 #include <mutex>
 #include <thread>
 
-#define STB_IMAGE_WRITE_IMPLEMENTATION
-#include "stb_image_write.h"
 GST_DEBUG_CATEGORY_STATIC (gst_dscropper_debug);
 #define GST_CAT_DEFAULT gst_dscropper_debug
 #define USE_EGLIMAGE 1
@@ -56,7 +54,9 @@ enum
   PROP_OUTPUT_PATH,
   PROP_INTERVAL,
   PROP_SCALE_RATIO,
-  PROP_CROP_MODE
+  PROP_SAVE_OBJECT,
+  PROP_SAVE_FRAME,
+  PROP_DRAW_INFO
 };
 
 #define CHECK_NVDS_MEMORY_AND_GPUID(object, surface)  \
@@ -84,7 +84,9 @@ enum
 #define DEFAULT_NAME_FORMAT "frame;trackid;classid;conf"
 #define DEFAULT_INTERVAL -1
 #define DEFAULT_SCALE_RATIO 1.0
-#define DEFAULT_CROP_MODE 0
+#define DEFAULT_SAVE_OBJECT 0
+#define DEFAULT_SAVE_FRAME 0
+#define DEFAULT_DRAW_INFO 0
 
 #define RGB_BYTES_PER_PIXEL 3
 #define RGBA_BYTES_PER_PIXEL 4
@@ -206,10 +208,28 @@ gst_dscropper_class_init (GstDsCropperClass * klass)
           (G_PARAM_READWRITE |
               G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_READY)));
 
-  g_object_class_install_property (gobject_class, PROP_CROP_MODE,
-      g_param_spec_uint ("crop-mode",
-          "crop mode",
-          "Set crop mode, 0 defalt only crop object, 1 crop both object and original frame", 0,
+  g_object_class_install_property (gobject_class, PROP_SAVE_OBJECT,
+      g_param_spec_uint ("save-object",
+          "save object flag",
+          "Flag whether to save objects or not, default 1", 0,
+          G_MAXUINT, 1,
+          GParamFlags
+          (G_PARAM_READWRITE |
+              G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_READY)));
+
+  g_object_class_install_property (gobject_class, PROP_SAVE_FRAME,
+      g_param_spec_uint ("save-frame",
+          "save frame flag",
+          "Flag whether to save frames or not, default 0", 0,
+          G_MAXUINT, 0,
+          GParamFlags
+          (G_PARAM_READWRITE |
+              G_PARAM_STATIC_STRINGS | GST_PARAM_MUTABLE_READY)));
+
+  g_object_class_install_property (gobject_class, PROP_DRAW_INFO,
+      g_param_spec_uint ("draw-info",
+          "draw info about objects",
+          "Whether draw info or not, only apply when frame save if enabled, default 0", 0,
           G_MAXUINT, 0,
           GParamFlags
           (G_PARAM_READWRITE |
@@ -273,7 +293,7 @@ gst_dscropper_class_init (GstDsCropperClass * klass)
   gst_element_class_set_details_simple (gstelement_class,
       "DsCropper plugin",
       "DsCropper Plugin",
-      "Clip objects based on Deepstream nvinfer outputs",
+      "Crop objects based on Deepstream nvinfer outputs",
       "DAMON ZHOU "
       "@ https://github.com/zhouyuchong/gst-dscropper");
 }
@@ -299,7 +319,9 @@ gst_dscropper_init (GstDsCropper * dscropper)
   dscropper->name_format = g_strdup (DEFAULT_NAME_FORMAT);
   dscropper->interval = DEFAULT_INTERVAL;
   dscropper->scale_ratio = DEFAULT_SCALE_RATIO;
-  dscropper->crop_mode = DEFAULT_CROP_MODE;
+  dscropper->save_object = DEFAULT_SAVE_OBJECT;
+  dscropper->save_frame = DEFAULT_SAVE_FRAME;
+  dscropper->draw_info = DEFAULT_DRAW_INFO;
   /* This quark is required to identify NvDsMeta when iterating through
    * the buffer metadatas */
   if (!_dsmeta_quark)
@@ -329,8 +351,14 @@ gst_dscropper_set_property (GObject * object, guint prop_id,
     case PROP_SCALE_RATIO:
       dscropper->scale_ratio = g_value_get_float (value);
       break;
-    case PROP_CROP_MODE:
-      dscropper->crop_mode = g_value_get_uint (value);
+    case PROP_SAVE_OBJECT:
+      dscropper->save_object = g_value_get_uint (value);
+      break;
+    case PROP_SAVE_FRAME:
+      dscropper->save_frame = g_value_get_uint (value);
+      break;
+    case PROP_DRAW_INFO:
+      dscropper->draw_info = g_value_get_uint (value);
       break;
     case PROP_OPERATE_ON_GIE_ID:
       dscropper->operate_on_gie_id = g_value_get_int (value);
@@ -398,8 +426,14 @@ gst_dscropper_get_property (GObject * object, guint prop_id,
     case PROP_INTERVAL:
       g_value_set_int (value, dscropper->interval);
       break;
-    case PROP_CROP_MODE:
-      g_value_set_uint (value, dscropper->crop_mode);
+    case PROP_SAVE_OBJECT:
+      g_value_set_uint (value, dscropper->save_object);
+      break;
+    case PROP_SAVE_FRAME:
+      g_value_set_uint (value, dscropper->save_frame);
+      break;
+    case PROP_DRAW_INFO:
+      g_value_set_uint (value, dscropper->draw_info);
       break;
     case PROP_SCALE_RATIO:
       g_value_set_float (value, dscropper->scale_ratio);
@@ -711,11 +745,22 @@ gst_dscropper_submit_input_buffer (GstBaseTransform * btrans,
   NppStatus stat;
 
   gboolean need_clip = FALSE;  
-  char surface_name[200];
+  char img_file_path[200];
 
   for (l_frame = batch_meta->frame_meta_list; l_frame != NULL;
       l_frame = l_frame->next) {
     frame_meta = (NvDsFrameMeta *) (l_frame->data);
+
+    gboolean need_save_frame = FALSE;
+    gboolean frame_trans_flag = FALSE;
+
+    NvBufSurfaceParams * currentFrameParams = in_surf->surfaceList + frame_meta->batch_id;
+    NvBufSurfaceColorFormat colorFormat = currentFrameParams->colorFormat;
+    size_t framePitch = currentFrameParams->pitch;
+    size_t frameSize = currentFrameParams->dataSize;
+    int frameWidth = currentFrameParams->width;
+    int frameHeight = currentFrameParams->height;
+
     void *frame_ptr_dev = NULL;
     void *frame_ptr_host = NULL;
     void *cropped_ptr_host = NULL;
@@ -756,78 +801,90 @@ gst_dscropper_submit_input_buffer (GstBaseTransform * btrans,
 
       if (!need_clip) continue;
 
-      if (g_queue_get_length(dscropper->data_queue) >= MAX_QUEUE_SIZE) continue;
-      
-      NvBufSurfaceParams * currentFrameParams = in_surf->surfaceList + frame_meta->batch_id;
-      NvBufSurfaceColorFormat colorFormat = currentFrameParams->colorFormat;
-      size_t framePitch = currentFrameParams->pitch;
-      size_t frameSize = currentFrameParams->dataSize;
-      int frameWidth = currentFrameParams->width;
-      int frameHeight = currentFrameParams->height;
+      // if there is target object in this frame as well as save_frame flag is true, we should save frame later
+      if (!need_save_frame && dscropper->save_frame) need_save_frame = TRUE;
+
+      // todo 是否需要进行这个判断呢？
+      // if (g_queue_get_length(dscropper->data_queue) >= MAX_QUEUE_SIZE) continue;
+    
       const int aDstOrder[3] = {0, 1, 2}; // RGB 3 channel
 
-      // printf("colorformat: %d\n", colorFormat);
-      // always convert to RGB 3 channel
-      CHECK_CUDA_STATUS (cudaMalloc(&frame_ptr_dev, frameWidth * frameHeight *3), "Could not allocate mem for RGB frame.");
-      
-      /*
-      get Nvsurface and transform them into rgb format
-      */
-      if (colorFormat == NVBUF_COLOR_FORMAT_RGB || colorFormat == NVBUF_COLOR_FORMAT_BGR) {
-        stat = nppiSwapChannels_8u_C3R( static_cast<Npp8u*>(currentFrameParams->dataPtr), 
-                                            framePitch,
-                                            static_cast<Npp8u*>(frame_ptr_dev),
-                                            frameWidth*3,
-                                            NppiSize {frameWidth, frameHeight},
-                                            aDstOrder);
+      // after this step, we should have RGB frame in frame_ptr_dev
+      if (!frame_trans_flag) {
+        // we only trans once
+        frame_trans_flag = TRUE;
+        // always convert to RGB 3 channel
+        CHECK_CUDA_STATUS (cudaMalloc(&frame_ptr_dev, frameWidth * frameHeight *3), "Could not allocate mem for RGB frame.");
+        /*
+        get Nvsurface and transform them into rgb format
+        */
+        if (colorFormat == NVBUF_COLOR_FORMAT_RGB || colorFormat == NVBUF_COLOR_FORMAT_BGR) {
+          stat = nppiSwapChannels_8u_C3R( static_cast<Npp8u*>(currentFrameParams->dataPtr), 
+                                              framePitch,
+                                              static_cast<Npp8u*>(frame_ptr_dev),
+                                              frameWidth*3,
+                                              NppiSize {frameWidth, frameHeight},
+                                              aDstOrder);
 
-      } else if (colorFormat > 18 && colorFormat < 27){
-        stat = nppiSwapChannels_8u_C4C3R( static_cast<Npp8u*>(currentFrameParams->dataPtr), 
-                                            framePitch,
-                                            static_cast<Npp8u*>(frame_ptr_dev),
-                                            frameWidth*3,
-                                            NppiSize {frameWidth, frameHeight},
-                                            aDstOrder);
-      } else {
-        const Npp8u* y_plane;                // Pointer to the Y plane
-        const Npp8u* uv_plane;               // Pointer to the UV plane
-        y_plane = static_cast<const Npp8u*>(currentFrameParams->dataPtr);
-        uv_plane = y_plane + (framePitch * frameHeight);
-        const Npp8u* pSrc[2];
-        pSrc[0] = y_plane;  // Y plane pointer
-        pSrc[1] = uv_plane; // UV plane pointer
-        stat = nppiNV12ToRGB_8u_P2C3R(pSrc,
-                          framePitch, 
-                          static_cast<Npp8u*>(frame_ptr_dev), 
-                          frameWidth*3,
-                          NppiSize {frameWidth, frameHeight});
-      }
-      if (stat != NPP_SUCCESS) {
-        GST_WARNING_OBJECT(dscropper, "Failed convert surface colorformat, error code: %d", stat);
-        break;
-      }
-      
-      int calculated_width = static_cast<int>(ceil(obj_meta->rect_params.width * dscropper->scale_ratio));
-      int calculated_height = static_cast<int>(ceil(obj_meta->rect_params.height * dscropper->scale_ratio));
+        } else if (colorFormat > 18 && colorFormat < 27){
+          stat = nppiSwapChannels_8u_C4C3R( static_cast<Npp8u*>(currentFrameParams->dataPtr), 
+                                              framePitch,
+                                              static_cast<Npp8u*>(frame_ptr_dev),
+                                              frameWidth*3,
+                                              NppiSize {frameWidth, frameHeight},
+                                              aDstOrder);
+        } else {
+          const Npp8u* y_plane;                // Pointer to the Y plane
+          const Npp8u* uv_plane;               // Pointer to the UV plane
+          y_plane = static_cast<const Npp8u*>(currentFrameParams->dataPtr);
+          uv_plane = y_plane + (framePitch * frameHeight);
+          const Npp8u* pSrc[2];
+          pSrc[0] = y_plane;  // Y plane pointer
+          pSrc[1] = uv_plane; // UV plane pointer
+          stat = nppiNV12ToRGB_8u_P2C3R(pSrc,
+                            framePitch, 
+                            static_cast<Npp8u*>(frame_ptr_dev), 
+                            frameWidth*3,
+                            NppiSize {frameWidth, frameHeight});
+        }
+        if (stat != NPP_SUCCESS) {
+          GST_WARNING_OBJECT(dscropper, "Failed convert surface colorformat, error code: %d", stat);
+          break;
+        }
+      }     
+      // since we don't need to save objects, we already got frame in last step, just break
+      if (!dscropper->save_object) break;
+
+      // 计算缩放后的宽度
+      double scaled_width = obj_meta->rect_params.width * dscropper->scale_ratio;
+      int calculated_width = static_cast<int>(ceil(scaled_width));
+      // 确保计算后的宽度不超过帧的宽度
       calculated_width = std::min(calculated_width, frameWidth);
+
+      // 计算缩放后的高度
+      double scaled_height = obj_meta->rect_params.height * dscropper->scale_ratio;
+      int calculated_height = static_cast<int>(ceil(scaled_height));
+      // 确保计算后的高度不超过帧的高度
       calculated_height = std::min(calculated_height, frameHeight);
-      int calculated_left = static_cast<int>(obj_meta->rect_params.left - (dscropper->scale_ratio - 1) * obj_meta->rect_params.width / 2);
-      int calculated_top = static_cast<int>(obj_meta->rect_params.top - (dscropper->scale_ratio - 1) * obj_meta->rect_params.height / 2);
+
+      // 计算缩放后的左边位置
+      double left_offset = (dscropper->scale_ratio - 1) * obj_meta->rect_params.width / 2;
+      int calculated_left = static_cast<int>(obj_meta->rect_params.left - left_offset);
+      // 确保左边位置不小于 0
       calculated_left = std::max(calculated_left, 0);
+      // 确保左边位置不超过帧宽度减去计算后的宽度
       calculated_left = std::min(calculated_left, frameWidth - calculated_width);
+
+      // 计算缩放后的顶部位置
+      double top_offset = (dscropper->scale_ratio - 1) * obj_meta->rect_params.height / 2;
+      int calculated_top = static_cast<int>(obj_meta->rect_params.top - top_offset);
+      // 确保顶部位置不小于 0
       calculated_top = std::max(calculated_top, 0);
+      // 确保顶部位置不超过帧高度减去计算后的高度
       calculated_top = std::min(calculated_top, frameHeight - calculated_height);
       
-      ClippedSurfaceInfo* info = g_new(ClippedSurfaceInfo, 1);
-      memset(surface_name, 0, sizeof(surface_name));
-      std::string formattedString = formatString(dscropper->name_format, frame_meta->source_id, frame_meta->frame_num, obj_meta->object_id, obj_meta->class_id, obj_meta->confidence);
-      sprintf(surface_name, "%s/%sobj.png", dscropper->output_path, formattedString.c_str());  
-      info->filename = g_strdup(surface_name);
-      info->width = calculated_width;
-      info->height = calculated_height;
       // printf("%d %d %d %d %d %d\n", frameWidth, frameHeight, calculated_left, calculated_top, calculated_width, calculated_height);
       CHECK_CUDA_STATUS(cudaMallocHost(&cropped_ptr_host, calculated_width * calculated_height * 3), "Could not allocate mem for host buffer.");
-
 
       stat = nppiResize_8u_C3R(static_cast<const Npp8u*>(frame_ptr_dev), 
                         frameWidth*3, 
@@ -843,34 +900,44 @@ gst_dscropper_submit_input_buffer (GstBaseTransform * btrans,
         GST_WARNING_OBJECT(dscropper, "nppiResize failed with error: %d", stat);
         break;
       }
-    
+
+      ImageBuffer* img_buf = g_new0(ImageBuffer, 1);
+      memset(img_file_path, 0, sizeof(img_file_path));
+      // std::string formattedString = formatString(dscropper->name_format, frame_meta->source_id, frame_meta->frame_num, obj_meta->object_id, obj_meta->class_id, obj_meta->confidence);
+      sprintf(img_file_path, "%s/obj%ld-frame%d.png", dscropper->output_path, obj_meta->object_id, frame_meta->frame_num);  
+      img_buf->target_path = g_strdup(img_file_path);
+      img_buf->width = calculated_width;
+      img_buf->height = calculated_height;
+      img_buf->image_ptr_host = cropped_ptr_host;
+
       g_mutex_lock (&dscropper->data_lock);
-      g_queue_push_tail (dscropper->data_queue, cropped_ptr_host);
-      g_queue_push_tail (dscropper->data_queue, info);
+      g_queue_push_tail (dscropper->data_queue, img_buf);
+      // g_queue_push_tail (dscropper->data_queue, info);
       g_mutex_unlock (&dscropper->data_lock);
       
-      if (dscropper->crop_mode) {
+    }
+    
+    if (need_save_frame) {
         CHECK_CUDA_STATUS(cudaMallocHost(&frame_ptr_host, frameWidth * frameHeight * 3), "Could not allocate mem for host frame buffer.");
         cudaMemcpy((void *)frame_ptr_host,
                     (void *)frame_ptr_dev,
                     frameWidth * frameHeight * 3,
                     cudaMemcpyDeviceToHost);
-        ClippedSurfaceInfo* info_frame = g_new(ClippedSurfaceInfo, 1);
-        memset(surface_name, 0, sizeof(surface_name));
-        // std::string fs = formatString(dscropper->name_format, frame_meta->frame_num, obj_meta->object_id, obj_meta->class_id, obj_meta->confidence);
-        sprintf(surface_name, "%s/%sfrm.png", dscropper->output_path, formattedString.c_str());  
-        info_frame->filename = g_strdup(surface_name);
-        info_frame->width = frameWidth;
-        info_frame->height = frameHeight;
+        ImageBuffer* frame_buf = g_new0(ImageBuffer, 1);
+        memset(img_file_path, 0, sizeof(img_file_path));
+        sprintf(img_file_path, "%s/frame%d.png", dscropper->output_path, frame_meta->frame_num);  
+        frame_buf->target_path = g_strdup(img_file_path);
+        frame_buf->width = frameWidth;
+        frame_buf->height = frameHeight;
+        frame_buf->image_ptr_host = frame_ptr_host;
 
         g_mutex_lock (&dscropper->data_lock);
-        g_queue_push_tail (dscropper->data_queue, frame_ptr_host);
-        g_queue_push_tail (dscropper->data_queue, info_frame);
+        // g_queue_push_tail (dscropper->data_queue, frame_ptr_host);
+        g_queue_push_tail (dscropper->data_queue, frame_buf);
         g_mutex_unlock (&dscropper->data_lock);
-        
-      }
-      // break;
+
     }
+
     cudaFree(frame_ptr_dev);
   }
   
@@ -1030,12 +1097,49 @@ void saveImageToFile(const char* filename, unsigned char* buffer, int width, int
     file.close();
 }
 
+std::vector<std::string> get_sorted_files(const std::string& dir_path) {
+    std::vector<std::string> files;
+    DIR *dir;
+    struct dirent *ent;
+    struct stat statbuf;
+
+    if ((dir = opendir(dir_path.c_str())) != NULL) {
+        while ((ent = readdir(dir)) != NULL) {
+            std::string file_path = dir_path + "/" + ent->d_name;
+            if (stat(file_path.c_str(), &statbuf) == 0 && S_ISREG(statbuf.st_mode)) {
+                files.push_back(file_path);
+            }
+        }
+        closedir(dir);
+    }
+
+    // 按修改时间排序
+    std::sort(files.begin(), files.end(), [](const std::string& a, const std::string& b) {
+        struct stat stat_a, stat_b;
+        if (stat(a.c_str(), &stat_a) == 0 && stat(b.c_str(), &stat_b) == 0) {
+            return stat_a.st_mtime < stat_b.st_mtime;
+        }
+        return false;
+    });
+
+    return files;
+}
+
+// 函数用于删除旧文件，保持目录下文件数量不超过限制
+void limit_file_count(const std::string& dir_path, int max_files) {
+    std::vector<std::string> files = get_sorted_files(dir_path);
+    if (files.size() > max_files) {
+        int files_to_delete = files.size() - max_files;
+        for (int i = 0; i < files_to_delete; ++i) {
+            unlink(files[i].c_str());
+        }
+    }
+}
 
 static gpointer
 gst_dscropper_data_loop (gpointer data)
 {
   GstDsCropper *dscropper = GST_DSCROPPER (data);
-  // DsCropperOutput *output;
   NvDsObjectMeta *obj_meta = NULL;
   gdouble scale_ratio = 1.0;
   auto start_time = std::chrono::system_clock::now();
@@ -1044,7 +1148,7 @@ gst_dscropper_data_loop (gpointer data)
   double duration_seconds;
   gpointer host_ptr = NULL;
   cv::Mat raw_image;
-  // cv::Mat re_image;
+  cv::Mat rgb_image;
 
   nvtxEventAttributes_t eventAttrib = {0};
   eventAttrib.version = NVTX_VERSION;
@@ -1065,21 +1169,25 @@ gst_dscropper_data_loop (gpointer data)
     }
     
     g_mutex_lock (&dscropper->data_lock);
-    
-    host_ptr = g_queue_pop_head(dscropper->data_queue);
-    ClippedSurfaceInfo *info = (ClippedSurfaceInfo *) g_queue_pop_head (dscropper->data_queue);
+    ImageBuffer *info = (ImageBuffer *) g_queue_pop_head (dscropper->data_queue);
     g_mutex_unlock (&dscropper->data_lock);
-    // since opencv has opposite channel order to nvdia, need to trans
-    raw_image = cv::Mat(info->height, info->width, CV_8UC3, static_cast<unsigned char*>(host_ptr), info->width * 3);
-    // cv::cvtColor(raw_image, re_image, CV_RGB2BGR);
-    cv::imwrite(info->filename, raw_image); 
-    
-  
-    // stbi_write_png(info->filename, info->width, info->height, 3, static_cast<unsigned char*>(host_ptr), info->width * 3);
-    // saveImageToFile(info->filename, static_cast<unsigned char*>(host_ptr), info->width, info->height, info->width * 3);
 
-    if (host_ptr){
+
+    host_ptr = info->image_ptr_host;
+    raw_image = cv::Mat(info->height, info->width, CV_8UC3, static_cast<unsigned char*>(host_ptr), info->width * 3);
+    cv::cvtColor(raw_image, rgb_image, cv::COLOR_BGR2RGB);
+    cv::imwrite(info->target_path, rgb_image); 
+
+    if (host_ptr) {
       cudaFreeHost(host_ptr);
+    }
+
+    std::string dir_path = std::string(info->target_path).substr(0, std::string(info->target_path).find_last_of("/"));
+    // 限制文件数量
+    limit_file_count(dir_path, 1000);
+    
+    if (info->target_path) {
+      g_free(info->target_path);
     }
     g_free(info);
   }
