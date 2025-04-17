@@ -904,7 +904,9 @@ gst_dscropper_submit_input_buffer (GstBaseTransform * btrans,
       ImageBuffer* img_buf = g_new0(ImageBuffer, 1);
       memset(img_file_path, 0, sizeof(img_file_path));
       // std::string formattedString = formatString(dscropper->name_format, frame_meta->source_id, frame_meta->frame_num, obj_meta->object_id, obj_meta->class_id, obj_meta->confidence);
-      sprintf(img_file_path, "%s/obj%ld-frame%d.png", dscropper->output_path, obj_meta->object_id, frame_meta->frame_num);  
+      // sprintf(img_file_path, "%s/src%d-frame%d-obj%ld.png", dscropper->output_path, frame_meta->source_id, frame_meta->frame_num, obj_meta->object_id);  
+      sprintf(img_file_path, "%s/src%d-frm%d-obj%ld.png", dscropper->output_path, frame_meta->source_id, frame_meta->frame_num, obj_meta->object_id);  
+
       img_buf->target_path = g_strdup(img_file_path);
       img_buf->width = calculated_width;
       img_buf->height = calculated_height;
@@ -925,7 +927,9 @@ gst_dscropper_submit_input_buffer (GstBaseTransform * btrans,
                     cudaMemcpyDeviceToHost);
         ImageBuffer* frame_buf = g_new0(ImageBuffer, 1);
         memset(img_file_path, 0, sizeof(img_file_path));
-        sprintf(img_file_path, "%s/frame%d.png", dscropper->output_path, frame_meta->frame_num);  
+        // sprintf(img_file_path, "%s/src%d-frame%d.png", dscropper->output_path, frame_meta->source_id, frame_meta->frame_num);  
+        sprintf(img_file_path, "%s/src%d-frm%d.png", dscropper->output_path, frame_meta->source_id, frame_meta->frame_num);  
+
         frame_buf->target_path = g_strdup(img_file_path);
         frame_buf->width = frameWidth;
         frame_buf->height = frameHeight;
