@@ -452,6 +452,29 @@ gst_dscropper_get_property (GObject * object, guint prop_id,
   }
 }
 
+void remove_directory_recursive(const char *path) {
+    GDir *dir;
+    const gchar *filename;
+    gchar *full_path;
+
+    dir = g_dir_open(path, 0, NULL);
+    if (dir) {
+        while ((filename = g_dir_read_name(dir))) {
+            full_path = g_build_filename(path, filename, NULL);
+            struct stat st;
+            if (stat(full_path, &st) == 0) {
+                if (S_ISDIR(st.st_mode)) {
+                    remove_directory_recursive(full_path);
+                } else {
+                    unlink(full_path);
+                }
+            }
+            g_free(full_path);
+        }
+        g_dir_close(dir);
+    }
+    rmdir(path);
+}
 /**
  * Initialize all resources and start the process thread
  */
@@ -506,9 +529,17 @@ gst_dscropper_start (GstBaseTransform * btrans)
                           dscropper->output_path),
                         ("Path is not a directory"));
       return FALSE;
+  } else {
+      remove_directory_recursive(dscropper->output_path);
+      if (mkdir(dscropper->output_path, 0755) == -1) {
+          // 创建失败，可以记录日志或者设置错误状态
+          GST_ELEMENT_ERROR(dscropper, RESOURCE, OPEN_WRITE,
+                            ("Failed to recreate directory '%s': %s",
+                              dscropper->output_path, g_strerror(errno)),
+                            ("Failed to recreate directory"));
+          return FALSE;
+      }
   }
-
-  
 
   /* Create process queue and cvmat queue to transfer data between threads.
    * We will be using this queue to maintain the list of frames/objects
