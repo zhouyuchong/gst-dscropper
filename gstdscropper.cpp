@@ -56,7 +56,8 @@ enum
   PROP_SCALE_RATIO,
   PROP_SAVE_OBJECT,
   PROP_SAVE_FRAME,
-  PROP_DRAW_INFO
+  PROP_DRAW_INFO,
+  PROP_MAX_IMG_NUM
 };
 
 #define CHECK_NVDS_MEMORY_AND_GPUID(object, surface)  \
@@ -87,6 +88,7 @@ enum
 #define DEFAULT_SAVE_OBJECT 0
 #define DEFAULT_SAVE_FRAME 0
 #define DEFAULT_DRAW_INFO 0
+#define DEFAULT_MAX_IMG_NUM 1000
 
 #define RGB_BYTES_PER_PIXEL 3
 #define RGBA_BYTES_PER_PIXEL 4
@@ -275,6 +277,13 @@ gst_dscropper_class_init (GstDsCropperClass * klass)
           (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
               GST_PARAM_MUTABLE_READY)));
 
+  g_object_class_install_property (gobject_class, PROP_MAX_IMG_NUM,
+      g_param_spec_uint ("max-img-num", "MAX image number",
+          "Max number of images to be saved",
+          0, G_MAXUINT, DEFAULT_MAX_IMG_NUM,
+          (GParamFlags) (G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+              GST_PARAM_MUTABLE_READY)));
+
   g_object_class_install_property (gobject_class, PROP_OPERATE_ON_CLASS_IDS,
       g_param_spec_string ("operated-on-class-ids", "Operate on Class ids",
           "Operate on objects with specified class ids\n"
@@ -322,6 +331,7 @@ gst_dscropper_init (GstDsCropper * dscropper)
   dscropper->save_object = DEFAULT_SAVE_OBJECT;
   dscropper->save_frame = DEFAULT_SAVE_FRAME;
   dscropper->draw_info = DEFAULT_DRAW_INFO;
+  dscropper->max_img_num = DEFAULT_MAX_IMG_NUM;
   /* This quark is required to identify NvDsMeta when iterating through
    * the buffer metadatas */
   if (!_dsmeta_quark)
@@ -359,6 +369,9 @@ gst_dscropper_set_property (GObject * object, guint prop_id,
       break;
     case PROP_DRAW_INFO:
       dscropper->draw_info = g_value_get_uint (value);
+      break;
+    case PROP_MAX_IMG_NUM:
+      dscropper->max_img_num = g_value_get_uint (value);
       break;
     case PROP_OPERATE_ON_GIE_ID:
       dscropper->operate_on_gie_id = g_value_get_int (value);
@@ -428,6 +441,10 @@ gst_dscropper_get_property (GObject * object, guint prop_id,
       break;
     case PROP_SAVE_OBJECT:
       g_value_set_uint (value, dscropper->save_object);
+      break;
+
+    case PROP_MAX_IMG_NUM:
+      g_value_set_uint (value, dscropper->max_img_num);
       break;
     case PROP_SAVE_FRAME:
       g_value_set_uint (value, dscropper->save_frame);
@@ -1219,7 +1236,7 @@ gst_dscropper_data_loop (gpointer data)
 
     std::string dir_path = std::string(info->target_path).substr(0, std::string(info->target_path).find_last_of("/"));
     // 限制文件数量
-    limit_file_count(dir_path, 1000);
+    limit_file_count(dir_path, dscropper->max_img_num);
     
     if (info->target_path) {
       g_free(info->target_path);

@@ -169,6 +169,7 @@ struct _GstDsCropper
   guint save_object;
   guint save_frame;
   guint draw_info;
+  guint max_img_num;
   
 };
 
